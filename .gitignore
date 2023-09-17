@@ -183,3 +183,4 @@ wandb
 *.jpg
 *.tiff
 *.npy
+*.parquet
