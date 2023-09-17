@@ -1,0 +1,1 @@
+alias python='/opt/conda/bin/python'

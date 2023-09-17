@@ -1,0 +1,60 @@
+{
+    "name":"kaggle-deps",
+    "dockerFile": "Dockerfile",  
+    "workspaceMount": "source=${localWorkspaceFolder},target=/kaggle,type=bind",
+    "workspaceFolder": "/kaggle",
+    "runArgs": [
+        "--gpus", "all",
+        "--shm-size", "48gb"
+    ],
+    "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash"
+          },
+          "zsh": {
+            "path": "zsh"
+          },
+          "fish": {
+            "path": "fish"
+          },
+        },
+        "extensions.verifySignature": false,
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "python.formatting.provider": "none",
+        "python.linting.enabled": true,
+        "python.linting.flake8Enabled": true,
+        "python.linting.flake8Args": ["--max-line-length", "120"],
+        "python.linting.mypyEnabled": true,
+        "isort.args": ["--profile", "black"],
+        "python.testing.unittestEnabled": false,
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
+        "autoDocstring.docstringFormat": "google",
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": true
+          }
+        }
+	    }
+    },
+    "extensions": [
+      "ms-python.python",
+      "ms-python.vscode-pylance",
+      "ms-python.black-formatter",
+      "ms-python.flake8",
+      "ms-python.isort",
+      "ms-python.mypy-type-checker",
+      "esbenp.prettier-vscode",
+      "yzhang.markdown-all-in-one",
+      "tamasfe.even-better-toml",
+      "redhat.vscode-yaml",
+      "njpwerner.autodocstring",
+      "vscodevim.vim"
+    ]
+  }
+}

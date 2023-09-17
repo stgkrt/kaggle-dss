@@ -1,0 +1,5 @@
+[tool.black]
+    py310 = true
+    line-length = 88
+    include = '\.pyi?$'
+    exclude = '''
