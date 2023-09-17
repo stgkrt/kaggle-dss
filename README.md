@@ -1,5 +1,5 @@
-# my kaggle template
-ぼくの かんがえた さいきょうの かぐるかんきょう
+# Child Mind Institute - Detect Sleep States
+[kaggle competition](https://www.kaggle.com/competitions/child-mind-institute-detect-sleep-states) 
 
 # directory
     ├── input/              <- Competition Datasets.  
