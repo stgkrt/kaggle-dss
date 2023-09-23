@@ -5,7 +5,7 @@
     "workspaceFolder": "/kaggle",
     "runArgs": [
         "--gpus", "all",
-        "--shm-size", "48gb"
+        "--shm-size", "60gb"
     ],
     "customizations": {
     "vscode": {
