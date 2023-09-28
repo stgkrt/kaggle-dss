@@ -1,6 +1,6 @@
 {
     "name":"kaggle-deps",
-    "dockerFile": "Dockerfile",  
+    "dockerFile": "Dockerfile",
     "workspaceMount": "source=${localWorkspaceFolder},target=/kaggle,type=bind",
     "workspaceFolder": "/kaggle",
     "runArgs": [
@@ -19,14 +19,14 @@
           },
           "fish": {
             "path": "fish"
-          },
+          }
         },
         "extensions.verifySignature": false,
         "terminal.integrated.defaultProfile.linux": "bash",
         "python.formatting.provider": "none",
         "python.linting.enabled": true,
         "python.linting.flake8Enabled": true,
-        "python.linting.flake8Args": ["--max-line-length", "120"],
+        "python.linting.flake8Args": ["--max-line-length", "88"],
         "python.linting.mypyEnabled": true,
         "isort.args": ["--profile", "black"],
         "python.testing.unittestEnabled": false,
@@ -56,5 +56,6 @@
       "njpwerner.autodocstring",
       "vscodevim.vim"
     ]
-  }
+  },
+  "postCreateCommand": "chmod +x /kaggle/script/setup_dev.sh & sh /kaggle/script/setup_dev.sh"
 }
