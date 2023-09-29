@@ -42,28 +42,32 @@ class EncoderBlock(nn.Module):
 class Encoder(nn.Module):
     def __init__(
         self,
-        input_channels: int = 16,
+        input_channels: int = 1,
+        embedding_base_channel: int = 16,
     ) -> None:
         super().__init__()
         self.encoder_blocks = nn.Sequential(
             EncoderBlock(
-                input_channels, input_channels * 2, pool_kernel_size=10, pool_stride=10
+                input_channels,
+                embedding_base_channel,
+                pool_kernel_size=10,
+                pool_stride=10,
             ),
             EncoderBlock(
-                input_channels * 2,
-                input_channels * 4,
+                embedding_base_channel,
+                embedding_base_channel * 2,
                 pool_kernel_size=8,
                 pool_stride=8,
             ),
             EncoderBlock(
-                input_channels * 4,
-                input_channels * 8,
+                embedding_base_channel * 2,
+                embedding_base_channel * 4,
                 pool_kernel_size=6,
                 pool_stride=6,
             ),
             EncoderBlock(
-                input_channels * 8,
-                input_channels * 16,
+                embedding_base_channel * 4,
+                embedding_base_channel * 8,
                 pool_kernel_size=4,
                 pool_stride=4,
             ),
@@ -77,30 +81,159 @@ class Encoder(nn.Module):
         return x, skip_connections
 
 
+class NeckBlock(nn.Module):
+    def __init__(self, input_channels) -> None:
+        super().__init__()
+        self.neck_blocks = nn.Sequential(
+            nn.Conv1d(input_channels, input_channels * 2, 3, padding="same"),
+            nn.BatchNorm1d(input_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(input_channels * 2, input_channels * 2, 3, padding="same"),
+            nn.BatchNorm1d(input_channels * 2),
+            nn.ReLU(),
+        )
+
+    def forward(self, x):
+        x = self.neck_blocks(x)
+        return x
+
+
+class CropLayer(nn.Module):
+    def __init__(self, crop_rate=2):
+        super().__init__()
+
+    def forward(self, x, skip_connection):
+        crop_len = int(skip_connection.shape[-1] * 0.8)  # 長さはお気持ち
+        if crop_len < x.shape[-1]:
+            x = x[:, :, crop_len:-crop_len]
+        return x
+
+
+class DecoderBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 32,
+        out_channels: int = 16,
+        conv_kernel_size: int = 5,
+        conv_padding: str = "same",
+        upsample_kernel_size: int = 10,
+        upsample_size: int = 10,
+    ) -> None:
+        super().__init__()
+        self.crop_layer = CropLayer(upsample_kernel_size)
+        self.upsample_conv = nn.Sequential(
+            nn.Upsample(size=upsample_size, mode="nearest"),
+            nn.Conv1d(
+                in_channels,
+                in_channels // 2,
+                conv_kernel_size,
+                padding=conv_padding,
+            ),
+            nn.BatchNorm1d(in_channels // 2),
+            nn.ReLU(),
+        )
+        self.decoder_conv = nn.Sequential(
+            nn.Conv1d(
+                in_channels, out_channels, conv_kernel_size, padding=conv_padding
+            ),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+            nn.Conv1d(
+                out_channels, out_channels, conv_kernel_size, padding=conv_padding
+            ),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+        )
+
+    def forward(self, x, skip_connection):
+        x = self.crop_layer(x, skip_connection)
+        x = self.upsample_conv(x)
+        x = torch.cat([x, skip_connection], dim=1)
+        x = self.decoder_conv(x)
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 16,
+        skip_connections_length: list = [20, 125, 1000, 10000],
+    ) -> None:
+        super().__init__()
+        self.decoder_blocks = nn.Sequential(
+            DecoderBlock(
+                input_channels * 16,
+                input_channels * 8,
+                conv_kernel_size=4,
+                upsample_kernel_size=4,
+                upsample_size=skip_connections_length[0],
+            ),
+            DecoderBlock(
+                input_channels * 8,
+                input_channels * 4,
+                conv_kernel_size=5,
+                upsample_kernel_size=5,
+                upsample_size=skip_connections_length[1],
+            ),
+            DecoderBlock(
+                input_channels * 4,
+                input_channels * 2,
+                conv_kernel_size=5,
+                upsample_kernel_size=8,
+                upsample_size=skip_connections_length[2],
+            ),
+            DecoderBlock(
+                input_channels * 2,
+                input_channels,
+                conv_kernel_size=5,
+                upsample_kernel_size=10,
+                upsample_size=skip_connections_length[3],
+            ),
+        )
+
+    def forward(self, x, skip_connections):
+        for idx, decoder_block in enumerate(self.decoder_blocks):
+            print(f" -- decoder block idx {idx} -- ")
+            print("croped input", x.shape)
+            print("skip connection", skip_connections[-idx - 1].shape)
+            x = decoder_block(x, skip_connections[-idx - 1])
+        return x
+
+
 class DSS_UTime_Model(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
-        self.conv0 = nn.Conv1d(config.input_channels, 32, 3, padding="same")
-        self.encoder = Encoder()
+        self.encoder = Encoder(config.input_channels, config.embedding_base_channel)
+        self.neck_conv = NeckBlock(config.embedding_base_channel * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channel, skip_connections_length)
+        # TODO: データに合わせてheadをつくる(5秒刻みの24時間ならデータ数は17280?)
+
+    def _get_skip_connections_length(self):
+        return [20, 125, 1000, 10000]
 
     def forward(self, x):
-        x = self.conv0(x)
-        x = self.encoder(x)
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
         return x
 
 
 if __name__ == "__main__":
     input_channels = 16
 
-    encoder = Encoder(input_channels)
-    # encoder = EncoderBlock(input_channels)
-    x = torch.randn(1, input_channels, 100000)  # (batch_size, input_channels, seq_len)
-    # print(x.shape)
-    output, skip_connetctions = encoder(x)
-    print(output.shape)
-    for idx, sk in enumerate(skip_connetctions):
-        print(f"skip connection[{idx}]", sk.shape)
+    class config:
+        input_channels = 1
+        embedding_base_channel = 16
 
-    # mp = nn.MaxPool1d(10, stride=10)
-    # y = mp(x)
-    # print(y.shape)
+    # neck_input = torch.randn(1, config.embedding_base_channel * 16, 20)
+    # print("input shape", neck_input.shape)
+    # neck = NeckBlock(config.embedding_base_channel * 16)
+    # y = neck(neck_input)
+
+    x = torch.randn(
+        1, config.input_channels, 10000
+    )  # (batch_size, input_channels, seq_len)
+    model = DSS_UTime_Model(config)
+    y = model(x)
+    print(y.shape)
