@@ -207,15 +207,25 @@ class DSS_UTime_Model(nn.Module):
         self.neck_conv = NeckBlock(config.embedding_base_channel * 8)
         skip_connections_length = self._get_skip_connections_length()
         self.decoder = Decoder(config.embedding_base_channel, skip_connections_length)
-        # TODO: データに合わせてheadをつくる(5秒刻みの24時間ならデータ数は17280?)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channel,
+                config.output_channels,
+                kernel_size=1,
+                padding="same",
+            ),
+            nn.Softmax(dim=1),
+        )
 
     def _get_skip_connections_length(self):
-        return [20, 125, 1000, 10000]
+        # return [20, 125, 1000, 10000]
+        return [36, 216, 1728, 17280]
 
     def forward(self, x):
         x, skip_connetctions = self.encoder(x)
         x = self.neck_conv(x)
         x = self.decoder(x, skip_connetctions)
+        x = self.head(x)
         return x
 
 
@@ -225,6 +235,7 @@ if __name__ == "__main__":
     class config:
         input_channels = 1
         embedding_base_channel = 16
+        output_channels = 2
 
     # neck_input = torch.randn(1, config.embedding_base_channel * 16, 20)
     # print("input shape", neck_input.shape)
@@ -232,8 +243,17 @@ if __name__ == "__main__":
     # y = neck(neck_input)
 
     x = torch.randn(
-        1, config.input_channels, 10000
+        1, config.input_channels, 17280
     )  # (batch_size, input_channels, seq_len)
+
+    print("encoder")
+    encoder = Encoder(config.input_channels, config.embedding_base_channel)
+    y, skip_connetctions = encoder(x)
+    print(y.shape)
+    for skip_connetction in skip_connetctions:
+        print(skip_connetction.shape)
+
+    print("dss model")
     model = DSS_UTime_Model(config)
     y = model(x)
     print(y.shape)
