@@ -1,5 +1,5 @@
 import numpy as np
-import pandas as pd
+import pandas as pd  # type: ignore
 import torch
 from torch.utils.data import DataLoader, Dataset
 
