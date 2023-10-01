@@ -18,7 +18,7 @@ def init_logger(log_file="train.log"):
     return logger
 
 
-defatult_logger = init_logger()
+# defatult_logger = init_logger()
 
 
 class AverageMeter(object):
@@ -44,8 +44,8 @@ class ProgressLogger:
     def __init__(
         self,
         data_num: int,
+        logger: logging.Logger,
         print_freq: int = 10,
-        logger: logging.Logger = defatult_logger,
         mode: str = "train",
     ) -> None:
         self.data_num = data_num
@@ -82,10 +82,9 @@ class ProgressLogger:
                 self.start_time,
                 float(batch_idx + 1) / self.data_num,
             )
-            log_str_base = (
-                f"[{self.mode}] Epoch: [{epoch}][{batch_idx}/{self.data_num}]"
-            )
-            log_str_base += ", " + f"Elapsed {self.batch_time.val:.4f} s"
-            log_str_base += "," + f"remain {remain_time} min"
-            self.logger.info(log_str_base)
-            self.logger.info(f"loss:{losses.val:.4f}, avg loss: {losses.avg:.4f}")
+            log_str = f"[{self.mode}] Epoch: [{epoch}][{batch_idx}/{self.data_num}]"
+            log_str += ", " + f"Elapsed {self.batch_time.val:.4f} s"
+            log_str += ", " + f"remain {remain_time}"
+            log_str += ", " + f"loss {losses.val:.4f}"
+            log_str += ", " + f"avg loss {losses.avg:.4f}"
+            self.logger.info(log_str)
