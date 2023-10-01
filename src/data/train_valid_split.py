@@ -12,7 +12,7 @@ def get_group_groupkfold_split(df, CFG):
 
 
 def get_train_valid_key_df(df, fold, CFG):
-    df = get_group_groupkfold_split(df, n_splits=CFG.n_fold, seed=CFG.seed)
+    df = get_group_groupkfold_split(df, CFG)
     train_df = df[df["fold"] != fold].reset_index(drop=True)
     valid_df = df[df["fold"] == fold].reset_index(drop=True)
     return train_df, valid_df
