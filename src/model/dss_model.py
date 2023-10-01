@@ -229,6 +229,10 @@ class DSS_UTime_Model(nn.Module):
         return x
 
 
+def get_model(config):
+    return DSS_UTime_Model(config)
+
+
 if __name__ == "__main__":
     input_channels = 16
 
