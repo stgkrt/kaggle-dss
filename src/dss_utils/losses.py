@@ -9,5 +9,6 @@ def get_criterion(CFG):
         positive_weight = torch.tensor([CFG.positive_weight])
     else:
         positive_weight = torch.tensor([0.5])
+    positive_weight = positive_weight.to(CFG.device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=positive_weight)
     return criterion
