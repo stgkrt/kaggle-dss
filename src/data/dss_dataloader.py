@@ -23,7 +23,7 @@ class DSSDataset(Dataset):
             padding_data = np.zeros(padding_length)
             series_data = np.concatenate([series_, padding_data])
         elif len(series_) > self.data_length:
-            print("[dataloader : warning] data length is over")
+            # print(f"[warning] data length is over.")
             series_data = series_[: self.data_length]
         else:
             series_data = series_
@@ -50,6 +50,8 @@ class DSSDataset(Dataset):
     def __getitem__(self, idx):
         data_key = self.key_df["series_date_key"].iloc[idx]
         series_data = self.series_df[self.series_df["series_date_key"] == data_key]
+        if len(series_data) > self.data_length:
+            print(f"[warning] data length is over. series_date_key: {data_key}")
         input = self._get_input_data(series_data)
         if self.mode == "test":
             return input
@@ -58,7 +60,7 @@ class DSSDataset(Dataset):
             return input, target
 
 
-def get_loader(key_df: pd.DataFrame, series_df: pd.DataFrame, CFG, mode: str = "train"):
+def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"):
     dataset = DSSDataset(key_df, series_df)
     if mode == "train":
         shuffle = True
