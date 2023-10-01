@@ -193,9 +193,6 @@ class Decoder(nn.Module):
 
     def forward(self, x, skip_connections):
         for idx, decoder_block in enumerate(self.decoder_blocks):
-            print(f" -- decoder block idx {idx} -- ")
-            print("croped input", x.shape)
-            print("skip connection", skip_connections[-idx - 1].shape)
             x = decoder_block(x, skip_connections[-idx - 1])
         return x
 
@@ -203,13 +200,13 @@ class Decoder(nn.Module):
 class DSS_UTime_Model(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
-        self.encoder = Encoder(config.input_channels, config.embedding_base_channel)
-        self.neck_conv = NeckBlock(config.embedding_base_channel * 8)
+        self.encoder = Encoder(config.input_channels, config.embedding_base_channels)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
         skip_connections_length = self._get_skip_connections_length()
-        self.decoder = Decoder(config.embedding_base_channel, skip_connections_length)
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
         self.head = nn.Sequential(
             nn.Conv1d(
-                config.embedding_base_channel,
+                config.embedding_base_channels,
                 config.output_channels,
                 kernel_size=1,
                 padding="same",
