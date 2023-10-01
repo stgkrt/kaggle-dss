@@ -58,6 +58,23 @@ class DSSDataset(Dataset):
             return input, target
 
 
+def get_loader(key_df: pd.DataFrame, series_df: pd.DataFrame, CFG, mode: str = "train"):
+    dataset = DSSDataset(key_df, series_df)
+    if mode == "train":
+        shuffle = True
+    else:
+        shuffle = False
+
+    loader = DataLoader(
+        dataset,
+        batch_size=CFG.batch_size,
+        shuffle=shuffle,
+        num_workers=CFG.num_workers,
+        pin_memory=True,
+    )
+    return loader
+
+
 if __name__ == "__main__":
     key_df = pd.read_csv("/kaggle/input/datakey_unique_non_null.csv")
     series_df = pd.read_parquet("/kaggle/input/train_series_withkey_non_null.parquet")
