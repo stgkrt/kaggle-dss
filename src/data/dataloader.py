@@ -1,17 +1,15 @@
-# pytorchでデーターローダーを作成する
-
-
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 
 class DSSDataset(Dataset):
     def __init__(
         self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
     ) -> None:
-        self.key_df = series_df
+        self.key_df = key_df
+        self.series_df = series_df
         self.mode = mode
         self.data_length = 17280
 
@@ -24,6 +22,11 @@ class DSSDataset(Dataset):
             # TODO:計測できていないときのデータが0の場合は変更する必要がある
             padding_data = np.zeros(padding_length)
             series_data = np.concatenate([series_, padding_data])
+        elif len(series_) > self.data_length:
+            print("[dataloader : warning] data length is over")
+            series_data = series_[: self.data_length]
+        else:
+            series_data = series_
         return series_data
 
     def _get_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
@@ -38,13 +41,15 @@ class DSSDataset(Dataset):
         return input_data
 
     def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
-        target = series_df_["event"].values[0]
+        target = series_df_["event"].values
+        target = self._padding_data_to_same_length(target)
+        target = np.expand_dims(target, axis=0)  # [channel=1, data_length]
         target = torch.tensor(target, dtype=torch.long)
         return target
 
     def __getitem__(self, idx):
-        data_key = self.key_df.iloc[idx]
-        series_data = self.series_df[self.series_df["series_data_key"] == data_key]
+        data_key = self.key_df["series_date_key"].iloc[idx]
+        series_data = self.series_df[self.series_df["series_date_key"] == data_key]
         input = self._get_input_data(series_data)
         if self.mode == "test":
             return input
@@ -54,4 +59,17 @@ class DSSDataset(Dataset):
 
 
 if __name__ == "__main__":
-    series_df = pd.read_parquet()
+    key_df = pd.read_csv("/kaggle/input/datakey_unique_non_null.csv")
+    series_df = pd.read_parquet("/kaggle/input/train_series_withkey_non_null.parquet")
+    # print(key_df.head())
+    # print(series_df.head())
+    # one_data_key = key_df["series_date_key"].iloc[0]
+    # print("one_data_key", one_data_key)
+    # one_data = series_df[series_df["series_date_key"] == one_data_key]
+    # print(one_data)
+    dataset = DSSDataset(key_df, series_df)
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=False)
+    for input, target in dataloader:
+        print(input.shape)
+        print(target.shape)
+        break
