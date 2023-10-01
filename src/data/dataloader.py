@@ -61,12 +61,7 @@ class DSSDataset(Dataset):
 if __name__ == "__main__":
     key_df = pd.read_csv("/kaggle/input/datakey_unique_non_null.csv")
     series_df = pd.read_parquet("/kaggle/input/train_series_withkey_non_null.parquet")
-    # print(key_df.head())
-    # print(series_df.head())
-    # one_data_key = key_df["series_date_key"].iloc[0]
-    # print("one_data_key", one_data_key)
-    # one_data = series_df[series_df["series_date_key"] == one_data_key]
-    # print(one_data)
+
     dataset = DSSDataset(key_df, series_df)
     dataloader = DataLoader(dataset, batch_size=2, shuffle=False)
     for input, target in dataloader:
