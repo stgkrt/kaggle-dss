@@ -150,7 +150,7 @@ def training_loop(CFG, LOGGER):
             scheduler.step()
 
             elapsed = int(time.time() - start_time) / 60
-            log_str = f"Epoch:{epoch}, fold:{fold}"
+            log_str = f"FOLD:{fold}, Epoch:{epoch}"
             log_str += f", train:{train_loss_avg:.4f}, valid:{valid_loss_avg:.4f}"
             log_str += f", lr:{lr:.6f}, elapsed time:{elapsed:.2f} min"
             LOGGER.info(log_str)
@@ -166,7 +166,7 @@ if __name__ == "__main__":
 
     class CFG:
         # exp
-        EXP_NAME = "debug"
+        EXP_NAME = "no_scoring_check"
 
         # directory
         INPUT_DIR = os.path.abspath(
@@ -185,7 +185,7 @@ if __name__ == "__main__":
         key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
         series_df = os.path.join(INPUT_DIR, "train_series_withkey_non_null.parquet")
         # data
-        folds = [0]
+        folds = [0, 1, 2, 3, 4]
         n_folds = 5
         num_workers = os.cpu_count()
         seed = 42
@@ -197,8 +197,8 @@ if __name__ == "__main__":
         embedding_base_channels = 16
 
         # training
-        n_epoch = 1
-        batch_size = 16
+        n_epoch = 10
+        batch_size = 32
         # optimizer
         lr = 1e-4
         weight_decay = 1e-6

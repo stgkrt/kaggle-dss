@@ -211,7 +211,8 @@ class DSS_UTime_Model(nn.Module):
                 kernel_size=1,
                 padding="same",
             ),
-            nn.Softmax(dim=1),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
         )
 
     def _get_skip_connections_length(self):
