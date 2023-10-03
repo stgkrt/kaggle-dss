@@ -207,12 +207,22 @@ class DSS_UTime_Model(nn.Module):
         self.head = nn.Sequential(
             nn.Conv1d(
                 config.embedding_base_channels,
-                config.output_channels,
-                kernel_size=1,
+                config.class_output_channels,
+                kernel_size=3,
                 padding="same",
             ),
             # nn.Softmax(dim=1),
             nn.Sigmoid(),
+        )
+        self.event_detector = nn.Sequential(
+            nn.Conv1d(
+                config.class_output_channels,
+                config.event_output_channels,
+                kernel_size=3,
+                padding="same",
+            ),
+            # [batch_size, 2, seq_len]. seq_lenの方向でsoftmaxをとる
+            nn.Softmax(dim=2),
         )
 
     def _get_skip_connections_length(self):
@@ -224,7 +234,8 @@ class DSS_UTime_Model(nn.Module):
         x = self.neck_conv(x)
         x = self.decoder(x, skip_connetctions)
         x = self.head(x)
-        return x
+        event = self.event_detector(x)
+        return x, event
 
 
 def get_model(config):
@@ -236,8 +247,9 @@ if __name__ == "__main__":
 
     class config:
         input_channels = 1
-        embedding_base_channel = 16
-        output_channels = 2
+        embedding_base_channels = 16
+        class_output_channels = 1
+        event_output_channels = 2
 
     # neck_input = torch.randn(1, config.embedding_base_channel * 16, 20)
     # print("input shape", neck_input.shape)
@@ -249,7 +261,7 @@ if __name__ == "__main__":
     )  # (batch_size, input_channels, seq_len)
 
     print("encoder")
-    encoder = Encoder(config.input_channels, config.embedding_base_channel)
+    encoder = Encoder(config.input_channels, config.embedding_base_channels)
     y, skip_connetctions = encoder(x)
     print(y.shape)
     for skip_connetction in skip_connetctions:
@@ -257,5 +269,6 @@ if __name__ == "__main__":
 
     print("dss model")
     model = DSS_UTime_Model(config)
-    y = model(x)
-    print(y.shape)
+    class_out, event_out = model(x)
+    print("class_out", class_out.shape)
+    print("event_out", event_out.shape)
