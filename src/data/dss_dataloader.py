@@ -67,8 +67,8 @@ class DSSDataset(Dataset):
     def _soft_label(self, target: torch.Tensor) -> torch.Tensor:
         target = target.float()
         target = target.unsqueeze(0)  # [channel=1, data_length]
-        # target = self.max_pool(target)
-        # target = self.average_pool(target)
+        target = self.max_pool(target)
+        target = self.average_pool(target)
         return target
 
     def _get_event_target_data(self, series_df_: pd.DataFrame) -> torch.Tensor:
@@ -90,12 +90,17 @@ class DSSDataset(Dataset):
         # if len(series_data) > self.data_length:
         #     print(f"[warning] data length is over. series_date_key: {data_key}")
         input = self._get_input_data(series_data)
+        # series_date_keyと開始時刻のstepをdictにしておく
+        input_info_dict = {
+            "series_date_key": data_key,
+            "start_step": series_data["step"].iloc[0].astype(np.int32),
+        }
         if self.mode == "test":
-            return input
+            return input, input_info_dict
         else:
             target = self._get_target_data(series_data)
             event_target = self._get_event_target_data(series_data)
-            return input, target, event_target
+            return input, target, event_target, input_info_dict
 
 
 def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"):
@@ -121,8 +126,9 @@ if __name__ == "__main__":
 
     dataset = DSSDataset(key_df, series_df)
     dataloader = DataLoader(dataset, batch_size=2, shuffle=False)
-    for input, target, event_target in dataloader:
+    for input, target, event_target, input_info in dataloader:
         print(input.shape)
         print(target.shape)
         print(event_target.shape)
+        print(input_info)
         break
