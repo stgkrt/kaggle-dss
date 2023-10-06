@@ -197,6 +197,26 @@ class Decoder(nn.Module):
         return x
 
 
+class DetectPeak(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        maxpool_kernel_size = 11  # 奇数じゃないと同じ長さで出力できない
+        maxpool_stride = 1
+        # 入力サイズと出力サイズが一致するようにpaddingを調整
+        maxpool_padding = int((maxpool_kernel_size - maxpool_stride) / 2)
+        self.max_pool = nn.MaxPool1d(
+            kernel_size=maxpool_kernel_size,
+            stride=maxpool_stride,
+            padding=maxpool_padding,
+        )
+
+    def forward(self, x):
+        max_pooled = self.max_pool(x)
+        peaks_idx = (x == max_pooled).float()
+        peaks_value = x * peaks_idx
+        return peaks_value
+
+
 class DSS_UTime_Model(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
@@ -218,12 +238,15 @@ class DSS_UTime_Model(nn.Module):
             nn.Conv1d(
                 config.class_output_channels,
                 config.event_output_channels,
-                kernel_size=3,
+                kernel_size=10,
                 padding="same",
             ),
             # [batch_size, 2, seq_len]. seq_lenの方向でsoftmaxをとる
-            nn.Softmax(dim=2),
+            # nn.Softmax(dim=2),
+            # seires内に複数のイベントがある可能性があるためsigmoidにしておく
+            nn.Sigmoid(),
         )
+        self.detect_peak = DetectPeak()
 
     def _get_skip_connections_length(self):
         # return [20, 125, 1000, 10000]
@@ -235,6 +258,7 @@ class DSS_UTime_Model(nn.Module):
         x = self.decoder(x, skip_connetctions)
         x = self.head(x)
         event = self.event_detector(x)
+        event = self.detect_peak(event)
         return x, event
 
 
