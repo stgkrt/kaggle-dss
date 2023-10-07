@@ -228,12 +228,13 @@ class DSS_UTime_Model(nn.Module):
             nn.Conv1d(
                 config.embedding_base_channels,
                 config.class_output_channels,
-                kernel_size=3,
+                kernel_size=5,
                 padding="same",
             ),
             # nn.Softmax(dim=1),
             nn.Sigmoid(),
         )
+
         self.event_detector = nn.Sequential(
             nn.Conv1d(
                 config.class_output_channels,
@@ -241,11 +242,40 @@ class DSS_UTime_Model(nn.Module):
                 kernel_size=10,
                 padding="same",
             ),
+            # あとでこういうのも試す
+            # nn.Conv1d(
+            #     config.class_output_channels,
+            #     16,
+            #     kernel_size=5,
+            #     padding="same",
+            # ),
+            # nn.Conv1d(
+            #     16,
+            #     32,
+            #     kernel_size=5,
+            #     padding="same",
+            # ),
+            # nn.Conv1d(
+            #     32,
+            #     64,
+            #     kernel_size=5,
+            #     padding="same",
+            # ),
+            # nn.Conv1d(
+            #     64,
+            #     config.event_output_channels,
+            #     kernel_size=5,
+            #     padding="same",
+            # ),
             # [batch_size, 2, seq_len]. seq_lenの方向でsoftmaxをとる
             # nn.Softmax(dim=2),
             # seires内に複数のイベントがある可能性があるためsigmoidにしておく
             nn.Sigmoid(),
         )
+
+        # event detectorから前の層にbackpropagationしないようにする
+        for param in self.event_detector.parameters():
+            param.requires_grad = False
         self.detect_peak = DetectPeak()
 
     def _get_skip_connections_length(self):
@@ -258,7 +288,7 @@ class DSS_UTime_Model(nn.Module):
         x = self.decoder(x, skip_connetctions)
         x = self.head(x)
         event = self.event_detector(x)
-        event = self.detect_peak(event)
+        # event = self.detect_peak(event)
         return x, event
 
 
