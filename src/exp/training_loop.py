@@ -18,12 +18,14 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 from dss_dataloader import get_loader
 from dss_model import get_model
 from log_utils import AverageMeter, ProgressLogger, init_logger
-from losses import get_criterion
+from losses import get_class_criterion, get_event_criterion
 from scheduler import get_optimizer, get_scheduler
 from train_valid_split import get_train_valid_key_df, get_train_valid_series_df
 
 
-def train_fn(CFG, epoch, model, train_loader, criterion, optimizer, LOGGER):
+def train_fn(
+    CFG, epoch, model, train_loader, class_criterion, event_criterion, optimizer, LOGGER
+):
     model.train()
     prog_loagger = ProgressLogger(
         data_num=len(train_loader),
@@ -40,9 +42,9 @@ def train_fn(CFG, epoch, model, train_loader, criterion, optimizer, LOGGER):
         event_targets = event_targets.to(CFG.device, non_blocking=True).float()
 
         class_preds, event_preds = model(inputs)
-        loss_class = criterion(class_preds, class_targets)
-        loss_event = criterion(event_preds, event_targets) * CFG.event_loss_weight
-        loss = loss_class + loss_event
+        loss_class = class_criterion(class_preds, class_targets)
+        loss_event = event_criterion(event_preds, event_targets)
+        loss = loss_class + loss_event * 10.0
         # preds = torch.sigmoid(preds)  # sigmoidいらない場合はこれを消す
         class_losses.update(loss_class.item(), CFG.batch_size)
         event_losses.update(loss_event.item(), CFG.batch_size)
@@ -56,37 +58,6 @@ def train_fn(CFG, epoch, model, train_loader, criterion, optimizer, LOGGER):
     gc.collect()
     torch.cuda.empty_cache()
     return losses.avg
-
-
-def get_validation_pred_target(
-    class_preds: torch.Tensor,
-    event_preds: torch.Tensor,
-    class_targets: torch.Tensor,
-    event_targets: torch.Tensor,
-    test_class_preds: np.ndarray,
-    test_event_preds: np.ndarray,
-    test_class_targets: np.ndarray,
-    test_event_targets: np.ndarray,
-):
-    class_targets = class_targets.detach().cpu().numpy()
-    event_targets = event_targets.detach().cpu().numpy()
-    class_preds = class_preds.detach().cpu().numpy()
-    event_preds = event_preds.detach().cpu().numpy()
-    if len(test_class_targets) == 0:
-        test_class_targets = class_targets.reshape(-1)  # type: ignore
-        test_event_targets = event_targets.reshape(-1)  # type: ignore
-        test_class_preds = class_preds.reshape(-1)  # type: ignore
-        test_event_preds = event_preds.reshape(-1)  # type: ignore
-    else:
-        test_class_targets = np.concatenate(
-            [test_class_targets, class_targets.reshape(-1)]
-        )
-        test_event_targets = np.concatenate(
-            [test_event_targets, event_targets.reshape(-1)]
-        )
-        test_class_preds = np.concatenate([test_class_preds, class_preds.reshape(-1)])
-        test_event_preds = np.concatenate([test_event_preds, event_preds.reshape(-1)])
-    return test_class_preds, test_event_preds, test_class_targets, test_event_targets
 
 
 def get_valid_values_dict(
@@ -114,6 +85,7 @@ def concat_valid_input_info(valid_input_info: dict, input_info: dict) -> dict:
     if len(valid_input_info["series_date_key"]) == 0:
         valid_input_info["series_date_key"] = input_info["series_date_key"]
         valid_input_info["start_step"] = input_info["start_step"]
+        valid_input_info["end_step"] = input_info["end_step"]
     else:
         valid_input_info["series_date_key"] = np.concatenate(
             [valid_input_info["series_date_key"], input_info["series_date_key"]], axis=0
@@ -121,10 +93,13 @@ def concat_valid_input_info(valid_input_info: dict, input_info: dict) -> dict:
         valid_input_info["start_step"] = np.concatenate(
             [valid_input_info["start_step"], input_info["start_step"]], axis=0
         )
+        valid_input_info["end_step"] = np.concatenate(
+            [valid_input_info["end_step"], input_info["end_step"]], axis=0
+        )
     return valid_input_info
 
 
-def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
+def valid_fn(CFG, epoch, model, valid_loader, class_criterion, event_criterion, LOGGER):
     model.eval()
 
     losses = AverageMeter()
@@ -138,7 +113,7 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
     )
     valid_predictions = {"class_preds": np.empty(0), "event_preds": np.empty(0)}
     valid_targets = {"class_targets": np.empty(0), "event_targets": np.empty(0)}
-    valid_input_info = {"series_date_key": [], "start_step": []}
+    valid_input_info = {"series_date_key": [], "start_step": [], "end_step": []}
 
     for batch_idx, (inputs, class_targets, event_targets, input_info_dict) in enumerate(
         valid_loader
@@ -149,9 +124,9 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
         with torch.no_grad():
             class_preds, event_preds = model(inputs)
             # preds = torch.sigmoid(preds)
-            class_loss = criterion(class_preds, class_targets)
-            event_loss = criterion(event_preds, event_targets) * CFG.event_loss_weight
-            loss = class_loss + event_loss
+            class_loss = class_criterion(class_preds, class_targets)
+            event_loss = event_criterion(event_preds, event_targets)
+            loss = class_loss + event_loss * 10.0
         losses.update(loss.item(), CFG.batch_size)
         class_losses.update(class_loss.item(), CFG.batch_size)
         event_losses.update(event_loss.item(), CFG.batch_size)
@@ -184,11 +159,12 @@ def get_oof_df(
     oof_df_fold: pd.DataFrame,
 ) -> pd.DataFrame:
     start_time = time.time()
-    print("create oof_df", end=" ... ")
-    for idx, (series_date_key, start_step) in enumerate(
+    print("creating oof_df", end=" ... ")
+    for idx, (series_date_key, start_step, end_step) in enumerate(
         zip(
             valid_input_info_dict["series_date_key"],
             valid_input_info_dict["start_step"],
+            valid_input_info_dict["end_step"],
         )
     ):
         # preds targets shape: [batch, ch, data_length]
@@ -196,11 +172,13 @@ def get_oof_df(
         event_pred = valid_preds_dict["event_preds"][idx]
         class_target = valid_targets_dict["class_targets"][idx]
         event_target = valid_targets_dict["event_targets"][idx]
-
-        series_date_data_num = len(
-            oof_df_fold[oof_df_fold["series_date_key"] == series_date_key]
+        data_condition = (
+            (oof_df_fold["series_date_key"] == series_date_key)
+            & (start_step <= oof_df_fold["step"])
+            & (oof_df_fold["step"] <= end_step + 1)
         )
-        steps = range(start_step, start_step + series_date_data_num, 1)
+        series_date_data_num = len((oof_df_fold[data_condition]))
+        steps = range(start_step, end_step + 1, 1)
         if series_date_data_num < len(class_pred[0]):
             class_pred = class_pred[0, :series_date_data_num]
             event_onset_pred = event_pred[0, :series_date_data_num]
@@ -237,9 +215,7 @@ def get_oof_df(
             event_onset_target = event_target[0]
             event_wakeup_target = event_target[1]
 
-        oof_df_fold.loc[
-            (oof_df_fold["series_date_key"] == series_date_key)
-        ] = oof_df_fold.loc[(oof_df_fold["series_date_key"] == series_date_key)].assign(
+        oof_df_fold.loc[data_condition] = oof_df_fold.loc[data_condition].assign(
             class_pred=class_pred,
             event_onset_pred=event_onset_pred,
             event_wakeup_pred=event_wakeup_pred,
@@ -268,7 +244,8 @@ def training_loop(CFG, LOGGER):
         # set model & learning fn
         model = get_model(CFG)
         model = model.to(CFG.device)
-        criterion = get_criterion(CFG)
+        class_criterion = get_class_criterion(CFG)
+        event_criterion = get_event_criterion(CFG)
         optimizer = get_optimizer(model, CFG)
         scheduler = get_scheduler(optimizer, CFG)
 
@@ -304,7 +281,14 @@ def training_loop(CFG, LOGGER):
         for epoch in range(0, CFG.n_epoch):
             LOGGER.info(f"- epoch:{epoch} -")
             train_loss_avg = train_fn(
-                CFG, epoch, model, train_loader, criterion, optimizer, LOGGER
+                CFG,
+                epoch,
+                model,
+                train_loader,
+                class_criterion,
+                event_criterion,
+                optimizer,
+                LOGGER,
             )
             (
                 valid_predictions,
@@ -316,16 +300,11 @@ def training_loop(CFG, LOGGER):
                 epoch,
                 model,
                 valid_loader,
-                criterion,
+                class_criterion,
+                event_criterion,
                 LOGGER,
             )
-            oof_df = get_oof_df(
-                input_info_dict_list,
-                valid_predictions,
-                valid_targets,
-                oof_df,
-                oof_df_fold,
-            )
+
             # auc = calc_auc(valid_targets, valid_preds)
             # score, threshold, _ = calc_cv(valid_targets, valid_preds)
             lr = scheduler.get_last_lr()[0]
@@ -337,7 +316,13 @@ def training_loop(CFG, LOGGER):
             log_str += f", lr:{lr:.6f}, elapsed time:{elapsed:.2f} min"
             LOGGER.info(log_str)
             # competition scoreを計算するように変更する
-
+        oof_df = get_oof_df(
+            input_info_dict_list,
+            valid_predictions,
+            valid_targets,
+            oof_df,
+            oof_df_fold,
+        )
         del model, train_loader, valid_loader
         gc.collect()
         torch.cuda.empty_cache()
@@ -386,13 +371,14 @@ if __name__ == "__main__":
         event_output_channels = 2
         embedding_base_channels = 16
 
-        event_loss_weight = 100.0
+        # event_loss_weight = 100.0
 
         # training
         n_epoch = 10
-        batch_size = 32
+        # batch_size = 32
+        batch_size = 128
         # optimizer
-        lr = 1e-4
+        lr = 1e-3
         weight_decay = 1e-6
         # scheduler
         # T_0 = 10

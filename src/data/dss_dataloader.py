@@ -94,6 +94,7 @@ class DSSDataset(Dataset):
         input_info_dict = {
             "series_date_key": data_key,
             "start_step": series_data["step"].iloc[0].astype(np.int32),
+            "end_step": series_data["step"].iloc[-1].astype(np.int32),
         }
         if self.mode == "test":
             return input, input_info_dict
