@@ -176,7 +176,7 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/python
 
 # my ignore
-wandb
+wandb/
 *.pth
 *.csv
 *.png
