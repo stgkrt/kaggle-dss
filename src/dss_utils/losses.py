@@ -17,11 +17,49 @@ class FocalLoss(nn.Module):
         return focal_loss.mean()
 
 
+class PositiveOnlyLoss(nn.Module):
+    def __init__(self, eps=1e-6):
+        super(PositiveOnlyLoss, self).__init__()
+        self.eps = eps
+
+    def forward(self, outputs, targets):
+        positive_mask = (targets > 0.5).float()
+        masked_outputs = outputs * positive_mask
+        masked_targets = targets * positive_mask
+        # bceっぽい感じのpositivie 部分だけ計算するlossにする
+        loss = -masked_targets * torch.log(masked_outputs + self.eps)
+        return loss.mean()
+
+
+class PositiveAroundNegativeLoss(nn.Module):
+    def __init__(self, pos_weight=10.0, neg_weight=1.0, eps=1e-7):
+        # weightはもう一方のlossを見て雰囲気で決めた
+        super(PositiveAroundNegativeLoss, self).__init__()
+        self.pos_weight = pos_weight
+        self.neg_weight = neg_weight
+        self.eps = eps
+
+    def forward(self, outputs, targets):
+        # dataloaderのpoolのサイズでこの閾値は変化するので注意
+        positive_mask = (targets > 0.5).float()
+        # average poolで作った1の周りのposとnegの閾値の間のところはlossを計算しない
+        negative_mask = (targets < self.eps).float()
+
+        pos_masked_outputs = outputs * positive_mask
+        neg_masked_outputs = outputs * negative_mask
+
+        pos_loss = -positive_mask * torch.log(pos_masked_outputs + self.eps)
+        neg_loss = -negative_mask * torch.log(1 - neg_masked_outputs + self.eps)
+
+        loss = pos_loss * self.pos_weight + neg_loss * self.neg_weight
+        return loss.mean()
+
+
 def get_class_criterion(CFG):
     if hasattr(CFG, "positive_weight"):
         positive_weight = torch.tensor([CFG.class_positive_weight])
     else:
-        positive_weight = torch.tensor([0.5])
+        positive_weight = torch.tensor([10.0])
 
     positive_weight = positive_weight.to(CFG.device)
     # criterion = nn.BCEWithLogitsLoss(pos_weight=positive_weight)
@@ -35,12 +73,14 @@ def get_event_criterion(CFG):
     # if hasattr(CFG, "positive_weight"):
     #     positive_weight = torch.tensor([CFG.event_positive_weight])
     # else:
-    #     positive_weight = torch.tensor([10.0])
+    #     positive_weight = torch.tensor([0.5])
 
     # positive_weight = positive_weight.to(CFG.device)
     # criterion = nn.BCELoss(weight=positive_weight)
 
-    criterion = FocalLoss(gamma=2.0)
+    # criterion = FocalLoss(gamma=2.0)
+    # criterion = PositiveOnlyLoss()
+    criterion = PositiveAroundNegativeLoss()
     return criterion
 
 
