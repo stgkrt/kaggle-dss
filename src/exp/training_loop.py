@@ -18,43 +18,34 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 from dss_dataloader import get_loader
 from dss_model import get_model
 from log_utils import AverageMeter, ProgressLogger, init_logger
-from losses import get_class_criterion, get_event_criterion
+from losses import get_class_criterion
 from scheduler import get_optimizer, get_scheduler
 from train_valid_split import get_train_valid_key_df, get_train_valid_series_df
 
 
-def train_fn(
-    CFG, epoch, model, train_loader, class_criterion, event_criterion, optimizer, LOGGER
-):
+def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER):
     model.train()
     prog_loagger = ProgressLogger(
         data_num=len(train_loader),
         print_freq=CFG.print_freq,
         logger=LOGGER,
     )
-    class_losses = AverageMeter()
-    event_losses = AverageMeter()
 
     losses = AverageMeter()
-    for batch_idx, (inputs, class_targets, event_targets, _) in enumerate(train_loader):
+    for batch_idx, (inputs, targets, _) in enumerate(train_loader):
         inputs = inputs.to(CFG.device, non_blocking=True).float()
-        class_targets = class_targets.to(CFG.device, non_blocking=True).float()
-        event_targets = event_targets.to(CFG.device, non_blocking=True).float()
+        targets = targets.to(CFG.device, non_blocking=True).float()
 
-        class_preds, event_preds = model(inputs)
-        loss_class = class_criterion(class_preds, class_targets)
-        loss_event = event_criterion(event_preds, event_targets)
-        loss = loss_class + loss_event * 10.0
+        preds = model(inputs)
+        loss = class_criterion(preds, targets)
         # preds = torch.sigmoid(preds)  # sigmoidいらない場合はこれを消す
-        class_losses.update(loss_class.item(), CFG.batch_size)
-        event_losses.update(loss_event.item(), CFG.batch_size)
-        losses.update(loss.item(), CFG.batch_size)
         loss.backward()
+        losses.update(loss.item(), CFG.batch_size)
         optimizer.step()  # モデル更新
         optimizer.zero_grad()  # 勾配の初期化
-        prog_loagger.log_progress(epoch, batch_idx, class_losses, event_losses)
+        prog_loagger.log_progress(epoch, batch_idx, losses)
 
-        del inputs, class_preds, event_preds, class_targets, event_targets
+        del inputs, preds, targets
     gc.collect()
     torch.cuda.empty_cache()
     return losses.avg
@@ -62,21 +53,15 @@ def train_fn(
 
 def get_valid_values_dict(
     class_values: torch.Tensor,
-    event_values: torch.Tensor,
     validation_dict: dict,
     mode: str = "preds",
 ) -> dict:
     class_values = class_values.detach().cpu().numpy()
-    event_values = event_values.detach().cpu().numpy()
     if len(validation_dict[f"class_{mode}"]) == 0:
         validation_dict[f"class_{mode}"] = class_values
-        validation_dict[f"event_{mode}"] = event_values
     else:
         validation_dict[f"class_{mode}"] = np.concatenate(
             [validation_dict[f"class_{mode}"], class_values], axis=0
-        )
-        validation_dict[f"event_{mode}"] = np.concatenate(
-            [validation_dict[f"event_{mode}"], event_values], axis=0
         )
     return validation_dict
 
@@ -99,48 +84,38 @@ def concat_valid_input_info(valid_input_info: dict, input_info: dict) -> dict:
     return valid_input_info
 
 
-def valid_fn(CFG, epoch, model, valid_loader, class_criterion, event_criterion, LOGGER):
+def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
     model.eval()
 
     losses = AverageMeter()
-    class_losses = AverageMeter()
-    event_losses = AverageMeter()
+    losses = AverageMeter()
     prog_loagger = ProgressLogger(
         data_num=len(valid_loader),
         print_freq=CFG.print_freq,
         logger=LOGGER,
         mode="valid",
     )
-    valid_predictions = {"class_preds": np.empty(0), "event_preds": np.empty(0)}
-    valid_targets = {"class_targets": np.empty(0), "event_targets": np.empty(0)}
+    valid_predictions = {"class_preds": np.empty(0)}
+    valid_targets = {"class_targets": np.empty(0)}
     valid_input_info = {"series_date_key": [], "start_step": [], "end_step": []}
 
-    for batch_idx, (inputs, class_targets, event_targets, input_info_dict) in enumerate(
-        valid_loader
-    ):
+    for batch_idx, (inputs, targets, input_info_dict) in enumerate(valid_loader):
         inputs = inputs.to(CFG.device, non_blocking=True).float()
-        class_targets = class_targets.to(CFG.device, non_blocking=True).float()
-        event_targets = event_targets.to(CFG.device, non_blocking=True).float()
+        targets = targets.to(CFG.device, non_blocking=True).float()
         with torch.no_grad():
-            class_preds, event_preds = model(inputs)
+            preds = model(inputs)
             # preds = torch.sigmoid(preds)
-            class_loss = class_criterion(class_preds, class_targets)
-            event_loss = event_criterion(event_preds, event_targets)
-            loss = class_loss + event_loss * 10.0
+            loss = criterion(preds, targets)
         losses.update(loss.item(), CFG.batch_size)
-        class_losses.update(class_loss.item(), CFG.batch_size)
-        event_losses.update(event_loss.item(), CFG.batch_size)
-        prog_loagger.log_progress(epoch, batch_idx, class_losses, event_losses)
+        prog_loagger.log_progress(epoch, batch_idx, losses)
 
         valid_predictions = get_valid_values_dict(
-            class_preds, event_preds, valid_predictions, mode="preds"
+            preds, valid_predictions, mode="preds"
         )
-        valid_targets = get_valid_values_dict(
-            class_targets, event_targets, valid_targets, mode="targets"
-        )
+        valid_targets = get_valid_values_dict(targets, valid_targets, mode="targets")
         valid_input_info = concat_valid_input_info(valid_input_info, input_info_dict)
 
-        del inputs, class_preds, event_preds, class_targets, event_targets
+        del inputs, preds, targets
         gc.collect()
         torch.cuda.empty_cache()
     return (
@@ -169,9 +144,7 @@ def get_oof_df(
     ):
         # preds targets shape: [batch, ch, data_length]
         class_pred = valid_preds_dict["class_preds"][idx]
-        event_pred = valid_preds_dict["event_preds"][idx]
         class_target = valid_targets_dict["class_targets"][idx]
-        event_target = valid_targets_dict["event_targets"][idx]
         data_condition = (
             (oof_df_fold["series_date_key"] == series_date_key)
             & (start_step <= oof_df_fold["step"])
@@ -181,47 +154,22 @@ def get_oof_df(
         steps = range(start_step, end_step + 1, 1)
         if series_date_data_num < len(class_pred[0]):
             class_pred = class_pred[0, :series_date_data_num]
-            event_onset_pred = event_pred[0, :series_date_data_num]
-            event_wakeup_pred = event_pred[1, :series_date_data_num]
             class_target = class_target[0, :series_date_data_num]
-            event_onset_target = event_target[0, :series_date_data_num]
-            event_wakeup_target = event_target[1, :series_date_data_num]
         elif series_date_data_num > len(class_pred[0]):
             padding_num = series_date_data_num - len(class_pred[0])
             class_pred = np.concatenate(
                 [class_pred[0], -1 * np.ones(padding_num)], axis=0
             )
-            event_onset_pred = np.concatenate(
-                [event_pred[0], -1 * np.ones(padding_num)], axis=0
-            )
-            event_wakeup_pred = np.concatenate(
-                [event_pred[1], -1 * np.ones(padding_num)], axis=0
-            )
             class_target = np.concatenate(
                 [class_target[0], -1 * np.ones(padding_num)], axis=0
             )
-            event_onset_target = np.concatenate(
-                [event_target[0], -1 * np.ones(padding_num)], axis=0
-            )
-            event_wakeup_target = np.concatenate(
-                [event_target[1], -1 * np.ones(padding_num)], axis=0
-            )
-
         else:
             class_pred = class_pred[0]
-            event_onset_pred = event_pred[0]
-            event_wakeup_pred = event_pred[1]
             class_target = class_target[0]
-            event_onset_target = event_target[0]
-            event_wakeup_target = event_target[1]
 
         oof_df_fold.loc[data_condition] = oof_df_fold.loc[data_condition].assign(
             class_pred=class_pred,
-            event_onset_pred=event_onset_pred,
-            event_wakeup_pred=event_wakeup_pred,
             class_target=class_target,
-            event_onset_target=event_onset_target,
-            event_wakeup_target=event_wakeup_target,
             steps=steps,
         )
 
@@ -245,12 +193,10 @@ def training_loop(CFG, LOGGER):
         model = get_model(CFG)
         model = model.to(CFG.device)
         class_criterion = get_class_criterion(CFG)
-        event_criterion = get_event_criterion(CFG)
         optimizer = get_optimizer(model, CFG)
         scheduler = get_scheduler(optimizer, CFG)
 
         # training
-
         start_time = time.time()
 
         # separate train/valid data
@@ -268,11 +214,7 @@ def training_loop(CFG, LOGGER):
         oof_df_fold = valid_series_df.copy()
         init_cols = [
             "class_pred",
-            "event_onset_pred",
-            "event_wakeup_pred",
             "class_target",
-            "event_onset_target",
-            "event_wakeup_target",
         ]
         oof_df_fold = oof_df_fold.assign(
             **{col: -1 * np.ones(len(oof_df_fold)) for col in init_cols}
@@ -286,7 +228,6 @@ def training_loop(CFG, LOGGER):
                 model,
                 train_loader,
                 class_criterion,
-                event_criterion,
                 optimizer,
                 LOGGER,
             )
@@ -301,7 +242,6 @@ def training_loop(CFG, LOGGER):
                 model,
                 valid_loader,
                 class_criterion,
-                event_criterion,
                 LOGGER,
             )
 
@@ -366,15 +306,17 @@ if __name__ == "__main__":
         group_key = "series_id"
 
         # model
+        model_type = "single_output"
         input_channels = 2
         class_output_channels = 1
         event_output_channels = 2
         embedding_base_channels = 16
 
-        # event_loss_weight = 100.0
+        class_loss_weight = 1.0
+        event_loss_weight = 100.0
 
         # training
-        n_epoch = 10
+        n_epoch = 5
         # batch_size = 32
         batch_size = 128
         # optimizer
