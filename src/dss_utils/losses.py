@@ -59,7 +59,7 @@ def get_class_criterion(CFG):
     if hasattr(CFG, "positive_weight"):
         positive_weight = torch.tensor([CFG.class_positive_weight])
     else:
-        positive_weight = torch.tensor([10.0])
+        positive_weight = torch.tensor([0.5])
 
     positive_weight = positive_weight.to(CFG.device)
     # criterion = nn.BCEWithLogitsLoss(pos_weight=positive_weight)

@@ -1,5 +1,6 @@
 import gc
 import os
+import random
 import sys
 import time
 import warnings
@@ -17,10 +18,21 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 
 from dss_dataloader import get_loader
 from dss_model import get_model
-from log_utils import AverageMeter, ProgressLogger, init_logger
+from log_utils import AverageMeter, ProgressLogger, WandbLogger, init_logger
 from losses import get_class_criterion
 from scheduler import get_optimizer, get_scheduler
 from train_valid_split import get_train_valid_key_df, get_train_valid_series_df
+
+
+def seed_everything(seed=42):
+    os.environ["PYTHONSEED"] = str(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms = True
 
 
 def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER):
@@ -189,6 +201,8 @@ def training_loop(CFG, LOGGER):
     oof_df = pd.DataFrame()
     for fold in CFG.folds:
         LOGGER.info(f"-- fold{fold} training start --")
+        wandb_logger = WandbLogger(CFG)
+        wandb_log_dict = {}
         # set model & learning fn
         model = get_model(CFG)
         model = model.to(CFG.device)
@@ -256,6 +270,13 @@ def training_loop(CFG, LOGGER):
             log_str += f", lr:{lr:.6f}, elapsed time:{elapsed:.2f} min"
             LOGGER.info(log_str)
             # competition scoreを計算するように変更する
+
+            # wandb log
+            wandb_log_dict[f"train_loss/fold{fold}"] = train_loss_avg
+            wandb_log_dict[f"valid_loss/fold{fold}"] = valid_loss_avg
+            wandb_log_dict[f"lr/fold{fold}"] = lr
+            wandb_logger.log_progress(epoch, wandb_log_dict)
+
         oof_df = get_oof_df(
             input_info_dict_list,
             valid_predictions,
@@ -267,7 +288,7 @@ def training_loop(CFG, LOGGER):
         gc.collect()
         torch.cuda.empty_cache()
 
-    oof_df_path = os.path.join(CFG.OUTPUT_DIR, "oof_df.parquet")
+    oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
     print("save oof_df to ", oof_df_path)
     oof_df.to_parquet(oof_df_path)
     print("oof_df saved. finish exp.")

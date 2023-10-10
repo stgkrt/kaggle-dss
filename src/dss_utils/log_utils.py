@@ -1,6 +1,57 @@
 import logging
 import math
+import os
 import time
+
+import yaml  # type: ignore
+
+import wandb
+
+
+def init_wandb(configs):
+    if configs.wandb_available:
+        WANDB_CONFIG = {
+            "competition": configs.competition_name,
+            "_wandb_kernel": configs.user_name,
+        }
+        os.environ["WANDB_SILENT"] = "true"
+        wandb.init(
+            project=WANDB_CONFIG["competition"],
+            config=configs,
+            group=configs.exp_category,
+            name=configs.exp_name,
+            reinit=True,
+            save_code=True,
+        )
+
+
+def save_config(configs):
+    config_dict = vars(configs)
+    with open(os.path.join(configs.exp_dir, "config.yaml"), "w") as f:
+        yaml.dump(config_dict, f)
+
+
+def set_wandb_make_dir(configs):
+    configs.exp_dir = os.path.join(configs.output_dir, configs.exp_name)
+    if "debug" in configs.exp_name:  # folderはdebug用で上書きOK。wandbも記録しない。
+        configs.folds = [0]
+        os.makedirs(configs.exp_dir, exist_ok=True)
+        configs.wandb_available = False
+        # configs.wandb_available = True
+    elif "check" in configs.exp_name:  # folderはdebug用で上書きOK。wandbは記録する。
+        configs.folds = [0]
+        os.makedirs(configs.exp_dir, exist_ok=True)
+        configs.wandb_available = True
+    else:
+        if os.path.exists(configs.exp_dir):
+            configs.exp_name += "_" + str(time.time())
+            configs.exp_dir = os.path.join(configs.output_dir, configs.exp_name)
+        os.makedirs(configs.exp_dir)
+        configs.wandb_available = True
+    configs.logger_path = os.path.join(configs.exp_dir, "train.log")
+    if configs.wandb_available:
+        init_wandb(configs)
+    return configs
 
 
 def init_logger(log_file="train.log"):
@@ -93,3 +144,16 @@ class ProgressLogger:
                 # log_str += ", " + f"event loss {event_losses.val:.4f}"
                 log_str += ", " + f"avg event loss {event_losses.avg:.4f}"
             self.logger.info(log_str)
+
+
+class WandbLogger:
+    def __init__(self, config) -> None:
+        self.wadnb_available = config.wandb_available
+
+    def log_progress(
+        self,
+        epoch: int,
+        log_dict: dict,
+    ) -> None:
+        if self.wadnb_available:
+            wandb.log(log_dict, step=epoch)  # type: ignore
