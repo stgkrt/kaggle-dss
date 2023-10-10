@@ -75,7 +75,7 @@ class ProgressLogger:
         epoch: int,
         batch_idx: int,
         class_losses: AverageMeter,
-        event_losses: AverageMeter,
+        event_losses: AverageMeter | None = None,
     ) -> None:
         self.batch_time.update(time.time() - self.end_time)
         if (batch_idx - 1 % self.print_freq == 0) or (batch_idx == (self.data_num) - 1):
@@ -88,6 +88,8 @@ class ProgressLogger:
             log_str += ", " + f"remain {remain_time}"
             # log_str += ", " + f"class loss {class_losses.val:.4f}"
             log_str += ", " + f"avg class loss {class_losses.avg:.4f}"
-            # log_str += ", " + f"event loss {event_losses.val:.4f}"
-            log_str += ", " + f"avg event loss {event_losses.avg:.4f}"
+
+            if event_losses is not None:
+                # log_str += ", " + f"event loss {event_losses.val:.4f}"
+                log_str += ", " + f"avg event loss {event_losses.avg:.4f}"
             self.logger.info(log_str)

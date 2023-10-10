@@ -217,7 +217,7 @@ class DetectPeak(nn.Module):
         return peaks_value
 
 
-class DSS_UTime_Model(nn.Module):
+class DSSUTimeModel(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
         self.encoder = Encoder(config.input_channels, config.embedding_base_channels)
@@ -234,54 +234,103 @@ class DSS_UTime_Model(nn.Module):
             # nn.Softmax(dim=1),
             nn.Sigmoid(),
         )
-        self.event_detect_conv = nn.Conv1d(
-            config.class_output_channels,
-            config.embedding_base_channels,
-            kernel_size=10,
-            padding="same",
+        self.class_avg_pool = nn.AvgPool1d(
+            kernel_size=11,
+            stride=1,
+            padding=5,
         )
 
-        # event detectorから前の層にbackpropagationしないようにする
-        for param in self.event_detect_conv.parameters():
-            param.requires_grad = False
-        self.event_detector = nn.Sequential(
+    def _get_skip_connections_length(self):
+        # return [20, 125, 1000, 10000]
+        return [36, 216, 1728, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        class_output = self.class_avg_pool(class_output)
+        return class_output
+
+
+class DSSEventoutUTimeModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = Encoder(config.input_channels, config.embedding_base_channels)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
             nn.Conv1d(
+                config.embedding_base_channels,
                 config.class_output_channels,
-                config.event_output_channels,
-                kernel_size=10,
+                kernel_size=5,
                 padding="same",
             ),
-            # あとでこういうのも試す
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+        # self.event_detect_conv = nn.Conv1d(
+        #     config.class_output_channels,
+        #     config.embedding_base_channels,
+        #     kernel_size=10,
+        #     padding="same",
+        # )
+
+        # event detectorから前の層にbackpropagationしないようにする
+        # for param in self.event_detect_conv.parameters():
+        #     param.requires_grad = False
+        self.class_avg_pool = nn.AvgPool1d(
+            kernel_size=11,
+            stride=1,
+            padding=5,
+        )
+
+        self.event_detector = nn.Sequential(
             # nn.Conv1d(
             #     config.class_output_channels,
-            #     16,
-            #     kernel_size=5,
-            #     padding="same",
-            # ),
-            # nn.Conv1d(
-            #     16,
-            #     32,
-            #     kernel_size=5,
-            #     padding="same",
-            # ),
-            # nn.Conv1d(
-            #     32,
-            #     64,
-            #     kernel_size=5,
-            #     padding="same",
-            # ),
-            # nn.Conv1d(
-            #     64,
             #     config.event_output_channels,
             #     kernel_size=5,
             #     padding="same",
             # ),
+            # あとでこういうのも試す
+            nn.Conv1d(
+                config.class_output_channels,
+                16,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Conv1d(
+                16,
+                32,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Conv1d(
+                32,
+                16,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Conv1d(
+                16,
+                1,
+                kernel_size=3,
+                padding="same",
+            ),
             # [batch_size, 2, seq_len]. seq_lenの方向でsoftmaxをとる
             # nn.Softmax(dim=2),
             # seires内に複数のイベントがある可能性があるためsigmoidにしておく
+            # nn.Sigmoid(),
+        )
+        self.event_onset_head = nn.Sequential(
+            nn.Linear(1, 1),
             nn.Sigmoid(),
         )
-
+        self.event_wakeup_head = nn.Sequential(
+            nn.Linear(1, 1),
+            nn.Sigmoid(),
+        )
         self.detect_peak = DetectPeak()
 
     def _get_skip_connections_length(self):
@@ -292,15 +341,39 @@ class DSS_UTime_Model(nn.Module):
         x, skip_connetctions = self.encoder(x)
         x = self.neck_conv(x)
         x = self.decoder(x, skip_connetctions)
-        x = self.head(x)
-        event = self.event_detect_conv(x)
-        event = self.event_detector(event)
+        class_output = self.head(x)
+        # class_output = self.class_avg_pool(class_output)
+        # event = self.event_detect_conv(x)
+        # class_output_detach = (
+        #     class_output.detach()
+        # )  # event detectorから前の層にbackpropagationしないようにする
+        with torch.no_grad():
+            class_output_detach = class_output.detach()
+            class_output_detach = self.class_avg_pool(class_output_detach)
+        # class_output_detach = class_output
+        # class_output_detach = self.class_avg_pool(class_output_detach)
+        shifted_class_output = torch.roll(class_output_detach, 1, dims=2)
+        invshifted_class_output = torch.roll(class_output_detach, -1, dims=2)
+        diff_class = shifted_class_output - invshifted_class_output
+        # event_emb = diff_class
+        event_emb = self.event_detector(diff_class)
+        event_onset = self.event_onset_head(event_emb.view(-1, 1))
+        event_wakeup = self.event_wakeup_head(event_emb.view(-1, 1))
+        event_output = torch.cat(
+            [event_onset.view(-1, 1, 17280), event_wakeup.view(-1, 1, 17280)], dim=1
+        )
+        # event_output = self.event_detector(diff_class)
+        # event_output = self.event_detector(class_output_detach)
         # event = self.detect_peak(event)
-        return x, event
+        return class_output, event_output
 
 
 def get_model(config):
-    return DSS_UTime_Model(config)
+    if config.model_type == "event_output":
+        model = DSSEventoutUTimeModel(config)
+    else:
+        model = DSSUTimeModel(config)
+    return model
 
 
 if __name__ == "__main__":
@@ -329,7 +402,7 @@ if __name__ == "__main__":
         print(skip_connetction.shape)
 
     print("dss model")
-    model = DSS_UTime_Model(config)
+    model = DSSUTimeModel(config)
     class_out, event_out = model(x)
     print("class_out", class_out.shape)
     print("event_out", event_out.shape)
