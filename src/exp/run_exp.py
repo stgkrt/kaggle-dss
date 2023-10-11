@@ -69,6 +69,16 @@ def parse_args():
             ROOT_DIR, "input", "processed_train_withkey_nonull.parquet"
         ),
     )
+    parser.add_argument(
+        "--event_df",
+        type=str,
+        default=os.path.join(
+            ROOT_DIR,
+            "input",
+            "child-mind-institute-detect-sleep-states",
+            "train_events.csv",
+        ),
+    )
     parser.add_argument("--group_key", type=str, default="series_id")
 
     parser.add_argument("--n_folds", type=int, default=5)
@@ -92,7 +102,7 @@ def parse_args():
     parser.add_argument("--T_mult", type=int, default=1)
     parser.add_argument("--eta_min", type=float, default=1e-9)
     parser.add_argument("--class_loss_weight", type=float, default=1.0)
-    parser.add_argument("--event_loss_weight", type=float, default=100.0)
+    parser.add_argument("--event_loss_weight", type=float, default=1.0)
 
     # log setting
     parser.add_argument("--print_freq", type=int, default=100)

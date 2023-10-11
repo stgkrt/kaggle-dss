@@ -17,9 +17,11 @@ sys.path.append(os.path.join(SRC_DIR, "data"))
 sys.path.append(os.path.join(SRC_DIR, "model"))
 
 from dss_dataloader import get_loader
+from dss_metrics import score
 from dss_model import get_model
 from log_utils import AverageMeter, ProgressLogger, WandbLogger, init_logger
 from losses import get_class_criterion
+from postprocess import detect_event_from_classpred, make_submission_df
 from scheduler import get_optimizer, get_scheduler
 from train_valid_split import get_train_valid_key_df, get_train_valid_series_df
 
@@ -69,6 +71,7 @@ def get_valid_values_dict(
     mode: str = "preds",
 ) -> dict:
     class_values = class_values.detach().cpu().numpy()
+    class_values = class_values.astype(np.float16)  # type: ignore
     if len(validation_dict[f"class_{mode}"]) == 0:
         validation_dict[f"class_{mode}"] = class_values
     else:
@@ -192,12 +195,14 @@ def get_oof_df(
 
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
-    return oof_df
+    return oof_df, oof_df_fold
 
 
 def training_loop(CFG, LOGGER):
     key_df = pd.read_csv(CFG.key_df)
     series_df = pd.read_parquet(CFG.series_df)
+    event_df = pd.read_csv(os.path.join(CFG.event_df))
+    event_df = event_df[event_df["series_id"].isin(key_df["series_id"])]
     oof_df = pd.DataFrame()
     for fold in CFG.folds:
         LOGGER.info(f"-- fold{fold} training start --")
@@ -277,17 +282,29 @@ def training_loop(CFG, LOGGER):
             wandb_log_dict[f"lr/fold{fold}"] = lr
             wandb_logger.log_progress(epoch, wandb_log_dict)
 
-        oof_df = get_oof_df(
+        oof_df, oof_df_fold = get_oof_df(
             input_info_dict_list,
             valid_predictions,
             valid_targets,
             oof_df,
             oof_df_fold,
         )
+        oof_df_fold = detect_event_from_classpred(oof_df_fold)
+        oof_scoring_df = make_submission_df(oof_df_fold)
+        event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
+        oof_score = score(event_df_fold, oof_scoring_df)
+        LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
+        wandb_logger.log_oofscore(fold, oof_score)
         del model, train_loader, valid_loader
         gc.collect()
         torch.cuda.empty_cache()
 
+    oof_df = detect_event_from_classpred(oof_df)
+    oof_scoring_df = make_submission_df(oof_df)
+    event_df = event_df[event_df["series_id"].isin(key_df["series_id"])]
+    oof_score = score(event_df, oof_scoring_df)
+    LOGGER.info(f"overall oof score: {oof_score:.4f}")
+    wandb_logger.log_overall_oofscore(oof_score)
     oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
     print("save oof_df to ", oof_df_path)
     oof_df.to_parquet(oof_df_path)
@@ -318,6 +335,7 @@ if __name__ == "__main__":
         # TEST_DIR = os.path.join(COMPETITION_DIR, "test")
         key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
         series_df = os.path.join(INPUT_DIR, "processed_train_withkey_nonull.parquet")
+        event_df = os.path.join(INPUT_DIR, "train_events.csv")
         # data
         # folds = [0, 1, 2, 3, 4]
         folds = [0]

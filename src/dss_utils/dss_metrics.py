@@ -24,12 +24,12 @@ class ParticipantVisibleError(Exception):
 def score(
     solution: pd.DataFrame,
     submission: pd.DataFrame,
-    tolerances: Dict[str, List[float]],
-    series_id_column_name: str,
-    time_column_name: str,
-    event_column_name: str,
-    score_column_name: str,
-    use_scoring_intervals: bool = False,
+    # tolerances: Dict[str, List[float]],
+    # series_id_column_name: str,
+    # time_column_name: str,
+    # event_column_name: str,
+    # score_column_name: str,
+    # use_scoring_intervals: bool = False,
 ) -> float:
     """Event Detection Average Precision, an AUCPR metric for event detection in
     time series and video.
@@ -214,6 +214,18 @@ def score(
     1.0
 
     """
+    series_id_column_name = "series_id"
+    time_column_name = "step"
+    event_column_name = "event"
+    score_column_name = "score"
+    use_scoring_intervals = None  # type:ignore
+
+    # [1, 3, 5, 7, 10, 13, 15, 20, 25, 30] minute
+    tolerances = {
+        "onset": [12, 36, 60, 90, 120, 150, 180, 240, 300, 360],
+        "wakeup": [12, 36, 60, 90, 120, 150, 180, 240, 300, 360],
+    }
+
     # Validate metric parameters
     assert len(tolerances) > 0, "Events must have defined tolerances."
     assert set(tolerances.keys()) == set(solution[event_column_name]).difference(
@@ -254,7 +266,7 @@ def score(
     globals()["score_column_name"] = score_column_name
     globals()["use_scoring_intervals"] = use_scoring_intervals
 
-    return event_detection_ap(solution, submission, tolerances)
+    return event_detection_ap(solution, submission, tolerances)  # type:ignore
 
 
 def filter_detections(
