@@ -90,6 +90,75 @@ class DSSDataset(Dataset):
             return input, target, input_info_dict
 
 
+class DSSAddRolldiffDataset(Dataset):
+    def __init__(
+        self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
+    ) -> None:
+        self.use_col = [
+            "series_date_key",
+            "step",
+            "event",
+            "anglez",
+            "enmo",
+            "anglez_absdiff_ave",
+            "enmo_absdiff_ave",
+        ]
+        self.key_df = key_df["series_date_key"].values
+        self.series_df = series_df[self.use_col]
+        self.mode = mode
+        self.data_length = 17280
+
+    def __len__(self) -> int:
+        return len(self.key_df)
+
+    def _padding_data_to_same_length(self, series_: np.ndarray) -> np.ndarray:
+        # series_.shape = [channel, data_length]
+        if series_.shape[-1] < self.data_length:
+            padding_length = self.data_length - series_.shape[-1]
+            # TODO:計測できていないときのデータが0の場合は変更する必要がある
+            pad_shape = [(0, 0), (0, padding_length)]
+            series_data = np.pad(series_, pad_shape, "edge")
+        elif series_.shape[-1] > self.data_length:
+            # print(f"[warning] data length is over.")
+            series_data = series_[:, : self.data_length]
+        else:
+            series_data = series_
+        return series_data
+
+    def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_["event"].values
+        target = target.reshape(1, -1)  # [channel=1, data_length]
+        target = self._padding_data_to_same_length(target)
+        target = torch.tensor(target, dtype=torch.long)
+        return target
+
+    def _get_rolldiff_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        input_data = series_df_[
+            ["anglez", "enmo", "anglez_absdiff_ave", "enmo_absdiff_ave"]
+        ].values.T
+        input_data = self._padding_data_to_same_length(input_data)
+        input_data = torch.tensor(input_data, dtype=torch.float16)
+        return input_data
+
+    def __getitem__(self, idx):
+        data_key = self.key_df[idx]
+        series_data = self.series_df[self.series_df["series_date_key"] == data_key]
+        # if len(series_data) > self.data_length:
+        #     print(f"[warning] data length is over. series_date_key: {data_key}")
+        input = self._get_rolldiff_input_data(series_data)
+        # series_date_keyと開始時刻のstepをdictにしておく
+        input_info_dict = {
+            "series_date_key": data_key,
+            "start_step": series_data["step"].values[0].astype(np.int32),
+            "end_step": series_data["step"].values[-1].astype(np.int32),
+        }
+        if self.mode == "test":
+            return input, input_info_dict
+        else:
+            target = self._get_target_data(series_data)
+            return input, target, input_info_dict
+
+
 class DSSEventDataset(Dataset):
     def __init__(
         self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
@@ -192,6 +261,8 @@ class DSSEventDataset(Dataset):
 def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"):
     if CFG.model_type == "event_output":
         dataset = DSSEventDataset(key_df, series_df)  # type: ignore
+    elif CFG.model_type == "add_rolldiff":
+        dataset = DSSAddRolldiffDataset(key_df, series_df)  # type: ignore
     else:
         dataset = DSSDataset(key_df, series_df)  # type: ignore
     if mode == "train":
@@ -210,14 +281,44 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
 
 
 if __name__ == "__main__":
-    key_df = pd.read_csv("/kaggle/input/datakey_unique_non_null.csv")
-    series_df = pd.read_parquet("/kaggle/input/processed_train_withkey_nonull.parquet")
+    import os
 
-    dataset = DSSDataset(key_df, series_df)
-    dataloader = DataLoader(dataset, batch_size=2, shuffle=False)
-    for input, target, event_target, input_info in dataloader:
+    num_workers = os.cpu_count()
+    num_workers = 0
+
+    series_df = pd.read_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
+    # series_date_keyとseries_data_key_strのuniqueだけでdataframeを作る
+    key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
+    key_df["series_id"], key_df["date"] = (
+        key_df["series_date_key_str"].str.split("_", 1).str
+    )
+    key_df = key_df.drop(columns=["series_date_key_str"], axis=1)
+    print(key_df.head())
+
+    # dataset = DSSDataset(key_df, series_df)
+    # dataloader = DataLoader(dataset, batch_size=2, shuffle=False)
+    # for input, target, input_info in dataloader:
+    #     print(input.shape)
+    #     print(target.shape)
+    #     print(input_info)
+    #     break
+    print("data loaded")
+    dataset = DSSAddRolldiffDataset(key_df, series_df)
+    # dataset = DSSAddRolldiffDatasetPL(key_df, series_df)
+    dataloader = DataLoader(
+        dataset, batch_size=16, shuffle=False, num_workers=num_workers
+    )
+    print("dataloader length:", len(dataloader))
+    import time
+
+    start_time = time.time()
+    for idx, (input, target, input_info) in enumerate(dataloader):
+        print(idx)
+        load_time = time.time() - start_time
+        print("load time:", load_time)
+        start_time = time.time()
+
         print(input.shape)
         print(target.shape)
-        print(event_target.shape)
-        print(input_info)
+        # print(input_info)
         break
