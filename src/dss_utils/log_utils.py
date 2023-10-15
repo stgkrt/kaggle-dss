@@ -129,7 +129,7 @@ class ProgressLogger:
         event_losses: AverageMeter | None = None,
     ) -> None:
         self.batch_time.update(time.time() - self.end_time)
-        if (batch_idx - 1 % self.print_freq == 0) or (batch_idx == (self.data_num) - 1):
+        if (batch_idx % self.print_freq == 0) or (batch_idx == (self.data_num) - 1):
             remain_time = self._timeSince(
                 self.start_time,
                 float(batch_idx + 1) / self.data_num,
