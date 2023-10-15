@@ -55,17 +55,37 @@ class PositiveAroundNegativeLoss(nn.Module):
         return loss.mean()
 
 
-def get_class_criterion(CFG):
-    if hasattr(CFG, "positive_weight"):
-        positive_weight = torch.tensor([CFG.class_positive_weight])
-    else:
-        positive_weight = torch.tensor([0.5])
+class NegativeIgnoreBCELoss(nn.Module):
+    def __init__(self, eps=1e-6):
+        super(NegativeIgnoreBCELoss, self).__init__()
+        self.eps = eps
 
-    positive_weight = positive_weight.to(CFG.device)
+    def forward(self, outputs, targets):
+        positive_mask = (targets > 0.0).float()
+        neg_mask = (targets == 0.0).float()
+        pos_masked_outputs = outputs * positive_mask
+        pos_masked_targets = targets * positive_mask
+        neg_masked_outputs = outputs * neg_mask
+        neg_masked_targets = (1 - targets) * neg_mask
+        # bceっぽい感じのpositivie 部分だけ計算するlossにする
+        pos_loss = -pos_masked_targets * torch.log(pos_masked_outputs + self.eps)
+        neg_loss = -neg_masked_targets * torch.log(1 - neg_masked_outputs + self.eps)
+        loss = pos_loss + neg_loss
+        return loss.mean()
+
+
+def get_class_criterion(CFG):
+    # if hasattr(CFG, "positive_weight"):
+    #     positive_weight = torch.tensor([CFG.class_positive_weight])
+    # else:
+    #     positive_weight = torch.tensor([0.5])
+
+    # positive_weight = positive_weight.to(CFG.device)
     # criterion = nn.BCEWithLogitsLoss(pos_weight=positive_weight)
-    criterion = nn.BCELoss(weight=positive_weight)
+    # criterion = nn.BCELoss(weight=positive_weight)
     # criterion = nn.CrossEntropyLoss(weight=positive_weight)
     # criterion = nn.CrossEntropyLoss()
+    criterion = NegativeIgnoreBCELoss()
     return criterion
 
 
