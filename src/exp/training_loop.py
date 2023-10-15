@@ -59,7 +59,7 @@ def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER
         optimizer.zero_grad()  # 勾配の初期化
         prog_loagger.log_progress(epoch, batch_idx, losses)
 
-        del inputs, preds, targets
+    del inputs, preds, targets
     gc.collect()
     torch.cuda.empty_cache()
     return losses.avg
@@ -130,9 +130,9 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
         valid_targets = get_valid_values_dict(targets, valid_targets, mode="targets")
         valid_input_info = concat_valid_input_info(valid_input_info, input_info_dict)
 
-        del inputs, preds, targets
-        gc.collect()
-        torch.cuda.empty_cache()
+    del inputs, preds, targets
+    gc.collect()
+    torch.cuda.empty_cache()
     return (
         valid_predictions,
         valid_targets,
@@ -145,7 +145,6 @@ def get_oof_df(
     valid_input_info_dict: dict,
     valid_preds_dict: dict,
     valid_targets_dict: dict,
-    oof_df: pd.DataFrame,
     oof_df_fold: pd.DataFrame,
 ) -> pd.DataFrame:
     start_time = time.time()
@@ -166,7 +165,8 @@ def get_oof_df(
             & (oof_df_fold["step"] <= end_step + 1)
         )
         series_date_data_num = len((oof_df_fold[data_condition]))
-        steps = range(start_step, end_step + 1, 1)
+        # steps = range(start_step, end_step + 1, 1)
+        steps = range(start_step, start_step + series_date_data_num, 1)
         if series_date_data_num < len(class_pred[0]):
             class_pred = class_pred[0, :series_date_data_num]
             class_target = class_target[0, :series_date_data_num]
@@ -181,29 +181,42 @@ def get_oof_df(
         else:
             class_pred = class_pred[0]
             class_target = class_target[0]
-
+        if not (len(class_pred) == len(class_target)) or not (
+            len(class_pred) == len(steps)
+        ):
+            print("len(class_pred)", len(class_pred))
+            print("len(class_target)", len(class_target))
+            print("len(steps)", len(steps))
+            raise ValueError("preds and targets length is not same")
         oof_df_fold.loc[data_condition] = oof_df_fold.loc[data_condition].assign(
             class_pred=class_pred,
             class_target=class_target,
             steps=steps,
         )
 
-    if len(oof_df) == 0:
-        oof_df = oof_df_fold.copy()
-    else:
-        oof_df = pd.concat([oof_df, oof_df_fold], axis=0)
-
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
-    return oof_df, oof_df_fold
+    return oof_df_fold
 
 
 def training_loop(CFG, LOGGER):
-    key_df = pd.read_csv(CFG.key_df)
+    # key_df = pd.read_csv(CFG.key_df)
+    LOGGER.info("loading series_df")
     series_df = pd.read_parquet(CFG.series_df)
+
+    key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
+    key_df = key_df.reset_index(drop=True)
+    key_df["series_id"], key_df["date"] = (
+        key_df["series_date_key_str"].str.split("_", 1).str
+    )
+    key_df = key_df.drop(columns=["series_date_key_str"], axis=1)
+
+    LOGGER.info("series_df data num : {}".format(len(series_df)))
+    LOGGER.info("key_df data num : {}".format(len(key_df)))
     event_df = pd.read_csv(os.path.join(CFG.event_df))
-    event_df = event_df[event_df["series_id"].isin(key_df["series_id"])]
-    oof_df = pd.DataFrame()
+    event_df = event_df[event_df["series_id"].isin(series_df["series_id"])]
+    # oof_df = pd.DataFrame()
+    oof_score_list = []
     for fold in CFG.folds:
         LOGGER.info(f"-- fold{fold} training start --")
         wandb_logger = WandbLogger(CFG)
@@ -218,6 +231,7 @@ def training_loop(CFG, LOGGER):
         # training
         start_time = time.time()
 
+        LOGGER.info(f"fold[{fold}] loading train/valid data")
         # separate train/valid data
         train_key_df, valid_key_df = get_train_valid_key_df(key_df, fold, CFG)
         train_series_df = get_train_valid_series_df(
@@ -226,9 +240,10 @@ def training_loop(CFG, LOGGER):
         valid_series_df = get_train_valid_series_df(
             series_df, key_df, fold, mode="valid"
         )
-
+        LOGGER.info(f"fold[{fold}] train data key num: {len(train_key_df)}")
         train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
         valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
+        LOGGER.info(f"fold[{fold}] get_loader finished")
 
         oof_df_fold = valid_series_df.copy()
         init_cols = [
@@ -264,8 +279,6 @@ def training_loop(CFG, LOGGER):
                 LOGGER,
             )
 
-            # auc = calc_auc(valid_targets, valid_preds)
-            # score, threshold, _ = calc_cv(valid_targets, valid_preds)
             lr = scheduler.get_last_lr()[0]
             scheduler.step()
 
@@ -282,33 +295,44 @@ def training_loop(CFG, LOGGER):
             wandb_log_dict[f"lr/fold{fold}"] = lr
             wandb_logger.log_progress(epoch, wandb_log_dict)
 
-        oof_df, oof_df_fold = get_oof_df(
+        # model save
+        model_path = os.path.join(CFG.exp_dir, f"fold{fold}_model.pth")
+        torch.save(model.state_dict(), model_path)
+
+        oof_df_fold = get_oof_df(
             input_info_dict_list,
             valid_predictions,
             valid_targets,
-            oof_df,
             oof_df_fold,
         )
         oof_df_fold = detect_event_from_classpred(oof_df_fold)
         oof_scoring_df = make_submission_df(oof_df_fold)
         event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
+        event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
         oof_score = score(event_df_fold, oof_scoring_df)
+        oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
+        oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
+        print("save oof_df to ", oof_df_fold_path)
+        oof_df_fold.to_parquet(oof_df_fold_path)
         wandb_logger.log_oofscore(fold, oof_score)
         del model, train_loader, valid_loader
         gc.collect()
         torch.cuda.empty_cache()
 
-    oof_df = detect_event_from_classpred(oof_df)
-    oof_scoring_df = make_submission_df(oof_df)
-    event_df = event_df[event_df["series_id"].isin(key_df["series_id"])]
-    oof_score = score(event_df, oof_scoring_df)
-    LOGGER.info(f"overall oof score: {oof_score:.4f}")
-    wandb_logger.log_overall_oofscore(oof_score)
-    oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
-    print("save oof_df to ", oof_df_path)
-    oof_df.to_parquet(oof_df_path)
-    print("oof_df saved. finish exp.")
+    # oof_df = detect_event_from_classpred(oof_df)
+    # oof_scoring_df = make_submission_df(oof_df)
+    # event_df = event_df[event_df["series_id"].isin(oof_scoring_df["series_id"])]
+    # event_df = event_df[event_df["step"].notnull()]
+    # oof_score = score(event_df, oof_scoring_df)
+    # LOGGER.info(f"overall oof score: {oof_score:.4f}")
+    # wandb_logger.log_overall_oofscore(oof_score)
+    over_all_score_mean = np.mean(oof_score_list)
+    LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
+    # oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
+    # print("save oof_df to ", oof_df_path)
+    # oof_df.to_parquet(oof_df_path)
+    # print("oof_df saved. finish exp.")
     # return oof_df
 
 

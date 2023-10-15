@@ -13,11 +13,11 @@ os.environ["WANDB_MODE"] = "offline"
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run experiment.")
+    parser = argparse.ArgumentParser(description="run experiment.")
     parser.add_argument(
         "--competition_name",
         type=str,
-        default="DSS",
+        default="dss",
     )
     parser.add_argument(
         "--user_name",
@@ -28,52 +28,55 @@ def parse_args():
         "--exp_category",
         type=str,
         default="debug",
-        help="Experiment category.",
+        help="experiment category.",
     )
     parser.add_argument(
         "--exp_name",
         type=str,
         default="no_scoring_check",
-        help="Experiment name.",
+        help="experiment name.",
     )
-    ROOT_DIR = os.path.abspath("/kaggle")
+    root_dir = os.path.abspath("/kaggle")
     parser.add_argument(
         "--input_dir",
         type=str,
-        default=os.path.join(ROOT_DIR, "input"),
-        help="Input directory.",
+        default=os.path.join(root_dir, "input"),
+        help="input directory.",
     )
     parser.add_argument(
         "--competition_dir",
         type=str,
         default=os.path.join(
-            ROOT_DIR, "input", "child-mind-institute-detect-sleep-states"
+            root_dir, "input", "child-mind-institute-detect-sleep-states"
         ),
-        help="Competition directory.",
+        help="competition directory.",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default=os.path.join(ROOT_DIR, "working"),
-        help="Output directory.",
+        default=os.path.join(root_dir, "working"),
+        help="output directory.",
     )
     parser.add_argument(
         "--key_df",
         type=str,
-        default=os.path.join(ROOT_DIR, "input", "datakey_unique_non_null.csv"),
+        default=os.path.join(root_dir, "input", "datakey_unique_non_null.csv"),
     )
     parser.add_argument(
         "--series_df",
         type=str,
         default=os.path.join(
-            ROOT_DIR, "input", "processed_train_withkey_nonull.parquet"
+            root_dir,
+            "input",
+            # "processed_train_withkey_nonull.parquet"
+            "preprocessed_train_series_le.parquet",
         ),
     )
     parser.add_argument(
         "--event_df",
         type=str,
         default=os.path.join(
-            ROOT_DIR,
+            root_dir,
             "input",
             "child-mind-institute-detect-sleep-states",
             "train_events.csv",
@@ -84,7 +87,8 @@ def parse_args():
     parser.add_argument("--n_folds", type=int, default=5)
     parser.add_argument("--folds", type=int, nargs="*", default=[0])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_workers", type=int, default=os.cpu_count())
+    # parser.add_argument("--num_workers", type=int, default=os.cpu_count())
+    parser.add_argument("--num_workers", type=int, default=2)
 
     # model
     parser.add_argument("--model_type", type=str, default="single_output")
@@ -94,8 +98,8 @@ def parse_args():
     parser.add_argument("--embedding_base_channels", type=int, default=16)
 
     # training setting
-    parser.add_argument("--n_epoch", type=int, default=5)
-    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--n_epoch", type=int, default=2)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-6)
     parser.add_argument("--T_0", type=int, default=10)
@@ -105,7 +109,7 @@ def parse_args():
     parser.add_argument("--event_loss_weight", type=float, default=1.0)
 
     # log setting
-    parser.add_argument("--print_freq", type=int, default=100)
+    parser.add_argument("--print_freq", type=int, default=50)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--device", type=str, default=device)
