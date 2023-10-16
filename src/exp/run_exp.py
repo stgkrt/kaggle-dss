@@ -112,7 +112,10 @@ def parse_args():
     parser.add_argument("--print_freq", type=int, default=50)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--device", type=str, default=device)
+    if device == "cuda":
+        parser.add_argument("--device", type=str, default="cuda")
+    else:
+        raise Exception("please use gpu")
     return parser.parse_args()
 
 
