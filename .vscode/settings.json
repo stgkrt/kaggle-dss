@@ -2,6 +2,7 @@
     "python.analysis.extraPaths": [
         "./src/data",
         "./src/model",
-        "./src/dss_utils"
+        "./src/dss_utils",
+        "./src/exp"
     ]
 }
