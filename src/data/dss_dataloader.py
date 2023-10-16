@@ -94,15 +94,28 @@ class DSSAddRolldiffDataset(Dataset):
     def __init__(
         self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
     ) -> None:
-        self.use_col = [
-            "series_date_key",
-            "step",
-            "event",
-            "anglez",
-            "enmo",
-            "anglez_absdiff_ave",
-            "enmo_absdiff_ave",
-        ]
+        print(mode)
+        if mode == "train" or mode == "valid":
+            self.use_col = [
+                "series_date_key",
+                "step",
+                "event",
+                "anglez",
+                "enmo",
+                "anglez_absdiff_ave",
+                "enmo_absdiff_ave",
+            ]
+        else:
+            self.use_col = [
+                "series_date_key",
+                "step",
+                "anglez",
+                "enmo",
+                "anglez_absdiff_ave",
+                "enmo_absdiff_ave",
+            ]
+
+        print("use columns", self.use_col)
         self.key_df = key_df["series_date_key"].values
         self.series_df = series_df[self.use_col]
         self.mode = mode
@@ -152,11 +165,11 @@ class DSSAddRolldiffDataset(Dataset):
             "start_step": series_data["step"].values[0].astype(np.int32),
             "end_step": series_data["step"].values[-1].astype(np.int32),
         }
-        if self.mode == "test":
-            return input, input_info_dict
-        else:
+        if self.mode == "train" or self.mode == "valid":
             target = self._get_target_data(series_data)
             return input, target, input_info_dict
+        else:
+            return input, input_info_dict
 
 
 class DSSEventDataset(Dataset):
@@ -260,11 +273,11 @@ class DSSEventDataset(Dataset):
 
 def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"):
     if CFG.model_type == "event_output":
-        dataset = DSSEventDataset(key_df, series_df)  # type: ignore
+        dataset = DSSEventDataset(key_df, series_df, mode)  # type: ignore
     elif CFG.model_type == "add_rolldiff":
-        dataset = DSSAddRolldiffDataset(key_df, series_df)  # type: ignore
+        dataset = DSSAddRolldiffDataset(key_df, series_df, mode)  # type: ignore
     else:
-        dataset = DSSDataset(key_df, series_df)  # type: ignore
+        dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
     if mode == "train":
         shuffle = True
     else:
