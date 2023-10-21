@@ -197,12 +197,12 @@ def inference(
 if __name__ == "__main__":
     exp_dir = "/kaggle/working/"
     exp_name = "baseline_alldata_allfold_000"
-    # series_df_path = (
-    #     "/kaggle/input/child-mind-institute-detect-sleep-states/test_series.parquet"
-    # )
     series_df_path = (
-        "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
+        "/kaggle/input/child-mind-institute-detect-sleep-states/test_series.parquet"
     )
+    # series_df_path = (
+    #     "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
+    # )
     tmp_file_path = "/kaggle/working/submission"
     sub_path = "/kaggle/working/submission"
 
