@@ -321,7 +321,7 @@ def training_loop(CFG, LOGGER):
         oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
         # oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
-        oof_dir = os.path.join(CFG.output_dir, "oof_", CFG.exp_name)
+        oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
         os.makedirs(oof_dir, exist_ok=True)
         oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
         print("save oof_df to ", oof_df_fold_path)
