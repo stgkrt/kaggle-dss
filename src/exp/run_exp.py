@@ -3,6 +3,7 @@ import os
 import sys
 
 import torch
+from pseudo_training_loop import pseudo_training_loop
 from training_loop import seed_everything, training_loop
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -14,6 +15,9 @@ os.environ["WANDB_MODE"] = "offline"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="run experiment.")
+    parser.add_argument(
+        "--train-mode", type=str, default="train", help="train or pseudo"
+    )
     parser.add_argument(
         "--competition_name",
         type=str,
@@ -68,8 +72,8 @@ def parse_args():
         default=os.path.join(
             root_dir,
             "input",
-            # "processed_train_withkey_nonull.parquet"
-            "preprocessed_train_series_le.parquet",
+            # "preprocessed_train_series_le_fold.parquet",
+            "preprocessed_train_series_le_50_fold.parquet",
         ),
     )
     parser.add_argument(
@@ -91,11 +95,12 @@ def parse_args():
     parser.add_argument("--num_workers", type=int, default=2)
 
     # model
-    parser.add_argument("--model_type", type=str, default="single_output")
-    parser.add_argument("--input_channels", type=int, default=2)
+    parser.add_argument("--model_type", type=str, default="add_rolldiff")
+    parser.add_argument("--input_channels", type=int, default=4)
     parser.add_argument("--class_output_channels", type=int, default=1)
     parser.add_argument("--event_output_channels", type=int, default=2)
     parser.add_argument("--embedding_base_channels", type=int, default=16)
+    parser.add_argument("--pseudo_weight_exp", type=str, default="exp003")
 
     # training setting
     parser.add_argument("--n_epoch", type=int, default=2)
@@ -111,8 +116,7 @@ def parse_args():
     # log setting
     parser.add_argument("--print_freq", type=int, default=50)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if device == "cuda":
+    if torch.cuda.is_available():
         parser.add_argument("--device", type=str, default="cuda")
     else:
         raise Exception("please use gpu")
@@ -132,4 +136,8 @@ if __name__ == "__main__":
     logger = init_logger(config.logger_path)
 
     seed_everything(config.seed)
+    if config.train_mode == "train":
+        training_loop(config, logger)
+    elif config.train_mode == "pseudo":
+        pseudo_training_loop(config, logger)
     training_loop(config, logger)

@@ -320,7 +320,8 @@ def pseudo_training_loop(CFG, LOGGER):
         # set model & learning fn
         model = get_model(CFG)
         # load trained model
-        model_path = os.path.join(CFG.pseudo_weight_dir, f"fold{fold}_model.pth")
+        pseudo_weight_dir = os.path.join(CFG.output_dir, CFG.pseudo_weight_exp)
+        model_path = os.path.join(pseudo_weight_dir, f"fold{fold}_model.pth")
         model.load_state_dict(torch.load(model_path))
         model = model.to(CFG.device)
         pseudo_criterion = get_pseudo_criterion(CFG)
@@ -438,7 +439,7 @@ def pseudo_training_loop(CFG, LOGGER):
         oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
         oof_df_fold_path = os.path.join(
-            CFG.exp_dir, f"oof_df_pseudo_fold{fold}.parquet"
+            CFG.output_dir, "_oof", CFG.exp_name, f"oof_df_pseudo_fold{fold}.parquet"
         )
         print("save oof_df to ", oof_df_fold_path)
         oof_df_fold.to_parquet(oof_df_fold_path)
@@ -457,24 +458,25 @@ if __name__ == "__main__":
     class CFG:
         # exp
         exp_name = "pseudo_exp003"
-        exp_dir = os.path.join(ROOT_DIR, "working", exp_name)
 
         # directory
-        INPUT_DIR = os.path.abspath(
+        input_dir = os.path.abspath(
             os.path.join(
                 ROOT_DIR,
                 "input",
             )
         )
-        COMPETITION_DIR = os.path.join(
-            INPUT_DIR,
+        competition_dir = os.path.join(
+            input_dir,
             "child-mind-institute-detect-sleep-states",
         )
-        OUTPUT_DIR = os.path.abspath(os.path.join(ROOT_DIR, "working", "debug"))
+        output_dir = os.path.abspath(os.path.join(ROOT_DIR, "working"))
+        exp_dir = os.path.join(output_dir, exp_name)
+
         series_df = os.path.join(
-            INPUT_DIR, "preprocessed_train_series_le_50_fold.parquet"
+            input_dir, "preprocessed_train_series_le_50_fold.parquet"
         )
-        event_df = os.path.join(COMPETITION_DIR, "train_events.csv")
+        event_df = os.path.join(competition_dir, "train_events.csv")
         # data
         # folds = [0, 1, 2, 3, 4]
         folds = [0]
@@ -489,7 +491,7 @@ if __name__ == "__main__":
         class_output_channels = 1
         event_output_channels = 2
         embedding_base_channels = 16
-        pseudo_weight_dir = "/kaggle/working/exp003"
+        pseudo_weight_exp = "exp003"
 
         class_loss_weight = 1.0
         event_loss_weight = 100.0
@@ -515,8 +517,8 @@ if __name__ == "__main__":
         else:
             raise ValueError("cuda is not available")
 
-    os.makedirs(CFG.OUTPUT_DIR, exist_ok=True)
+    os.makedirs(CFG.exp_dir, exist_ok=True)
 
-    LOGGER = init_logger(log_file=os.path.join(CFG.OUTPUT_DIR, "check.log"))
+    LOGGER = init_logger(log_file=os.path.join(CFG.exp_dir, "check.log"))
     LOGGER.info(f"using device: {CFG.device}")
     pseudo_training_loop(CFG, LOGGER)
