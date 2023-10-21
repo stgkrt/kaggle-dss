@@ -115,7 +115,6 @@ class DSSAddRolldiffDataset(Dataset):
                 "enmo_absdiff_ave",
             ]
 
-        print("use columns", self.use_col)
         self.key_df = key_df["series_date_key"].values
         self.series_df = series_df[self.use_col]
         self.mode = mode
@@ -170,6 +169,106 @@ class DSSAddRolldiffDataset(Dataset):
             return input, target, input_info_dict
         else:
             return input, input_info_dict
+
+
+class DSSPseudoDataset(Dataset):
+    def __init__(
+        self,
+        key_df: pd.DataFrame,
+        series_df: pd.DataFrame,
+        mode: str = "train",
+        pseudo_threshold: float = 0.3,
+    ) -> None:
+        self.use_col = [
+            "series_date_key",
+            "step",
+            "event",
+            "anglez",
+            "enmo",
+            "anglez_absdiff_ave",
+            "enmo_absdiff_ave",
+            "class_pseudo_pred",
+        ]
+        self.key_df = key_df["series_date_key"].values
+        self.series_df = series_df[self.use_col]
+        self.mode = mode
+        self.data_length = 17280
+        self.pseudo_threshold = pseudo_threshold
+
+    def __len__(self) -> int:
+        return len(self.key_df)
+
+    def _padding_data_to_same_length(self, series_: np.ndarray) -> np.ndarray:
+        # series_.shape = [channel, data_length]
+        if series_.shape[-1] < self.data_length:
+            padding_length = self.data_length - series_.shape[-1]
+            # TODO:計測できていないときのデータが0の場合は変更する必要がある
+            pad_shape = [(0, 0), (0, padding_length)]
+            series_data = np.pad(series_, pad_shape, "edge")
+        elif series_.shape[-1] > self.data_length:
+            # print(f"[warning] data length is over.")
+            series_data = series_[:, : self.data_length]
+        else:
+            series_data = series_
+        return series_data
+
+    def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_["event"].values
+        target = target.reshape(1, -1)  # [channel=1, data_length]
+        target = self._padding_data_to_same_length(target)
+        target = torch.tensor(target, dtype=torch.long)
+        return target
+
+    def _get_pseudo_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_["class_pseudo_pred"].values
+        target = target.reshape(1, -1)  # [channel=1, data_length]
+        # 0.5-threshold ~ 0.5+thresholdの値は-1にする
+        condition_ignore = (0.5 - self.pseudo_threshold <= target) & (
+            target <= 0.5 + self.pseudo_threshold
+        )
+        target = np.where(condition_ignore, -np.ones_like(target), target)
+        # pseudo_threshold以下の値は0、0.5+pseudo_threshold以上の値は1にする
+        condition_zero = (0.0 <= target) & (target <= 0.5 - self.pseudo_threshold)
+        target = np.where(condition_zero, np.zeros_like(target), target)
+        target = np.where(
+            target > 0.5 + self.pseudo_threshold, np.ones_like(target), target
+        )
+        # if target.sum() == 0:
+        #     raise ValueError("pseudo target is all zero.")
+        target = self._padding_data_to_same_length(target)
+        target = torch.tensor(target, dtype=torch.long)
+        return target
+
+    def _get_pseuo_target_orig(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_["class_pseudo_pred"].values
+        target = target.reshape(1, -1)  # [channel=1, data_length]
+        target = self._padding_data_to_same_length(target)
+        target = torch.tensor(target, dtype=torch.float32)
+        return target
+
+    def _get_rolldiff_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        input_data = series_df_[
+            ["anglez", "enmo", "anglez_absdiff_ave", "enmo_absdiff_ave"]
+        ].values.T
+        input_data = self._padding_data_to_same_length(input_data)
+        input_data = torch.tensor(input_data, dtype=torch.float16)
+        return input_data
+
+    def __getitem__(self, idx):
+        data_key = self.key_df[idx]
+        series_data = self.series_df[self.series_df["series_date_key"] == data_key]
+        input = self._get_rolldiff_input_data(series_data)
+        # series_date_keyと開始時刻のstepをdictにしておく
+        input_info_dict = {
+            "series_date_key": data_key,
+            "start_step": series_data["step"].values[0].astype(np.int32),
+            "end_step": series_data["step"].values[-1].astype(np.int32),
+        }
+        target = self._get_target_data(series_data)
+        pseudo_target = self._get_pseudo_target_data(series_data)
+        # pseudo_target_orig = self._get_pseuo_target_orig(series_data)
+        # return input, target, pseudo_target, input_info_dict, pseudo_target_orig
+        return input, target, pseudo_target, input_info_dict
 
 
 class DSSEventDataset(Dataset):
@@ -272,13 +371,20 @@ class DSSEventDataset(Dataset):
 
 
 def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"):
-    if CFG.model_type == "event_output":
-        dataset = DSSEventDataset(key_df, series_df, mode)  # type: ignore
-    elif CFG.model_type == "add_rolldiff":
-        dataset = DSSAddRolldiffDataset(key_df, series_df, mode)  # type: ignore
+    if mode == "pseudo":
+        if hasattr(CFG, "pseudo_threshold"):
+            pseudo_threshold = CFG.pseudo_threshold
+        else:
+            pseudo_threshold = 0.3
+        dataset = DSSPseudoDataset(key_df, series_df, mode, pseudo_threshold)
     else:
-        dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
-    if mode == "train":
+        if CFG.model_type == "event_output":
+            dataset = DSSEventDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "add_rolldiff":
+            dataset = DSSAddRolldiffDataset(key_df, series_df, mode)  # type: ignore
+        else:
+            dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
+    if mode == "train" or mode == "pseudo":
         shuffle = True
     else:
         shuffle = False
@@ -298,8 +404,15 @@ if __name__ == "__main__":
 
     num_workers = os.cpu_count()
     num_workers = 0
+    is_pseudo = True
 
-    series_df = pd.read_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
+    class CFG:
+        pseudo_threshold = 0.3
+        num_workers = num_workers
+        batch_size = 2
+
+    # series_df = pd.read_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
+    series_df = pd.read_parquet("/kaggle/input/pseudo_train_series_fold0_le20.parquet")
     # series_date_keyとseries_data_key_strのuniqueだけでdataframeを作る
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     key_df["series_id"], key_df["date"] = (
@@ -308,30 +421,37 @@ if __name__ == "__main__":
     key_df = key_df.drop(columns=["series_date_key_str"], axis=1)
     print(key_df.head())
 
-    # dataset = DSSDataset(key_df, series_df)
-    # dataloader = DataLoader(dataset, batch_size=2, shuffle=False)
-    # for input, target, input_info in dataloader:
-    #     print(input.shape)
-    #     print(target.shape)
-    #     print(input_info)
-    #     break
+    print(series_df.head())
+
     print("data loaded")
-    dataset = DSSAddRolldiffDataset(key_df, series_df)
-    # dataset = DSSAddRolldiffDatasetPL(key_df, series_df)
-    dataloader = DataLoader(
-        dataset, batch_size=16, shuffle=False, num_workers=num_workers
-    )
+
+    dataloader = get_loader(CFG, key_df, series_df, mode="pseudo")
     print("dataloader length:", len(dataloader))
     import time
 
     start_time = time.time()
-    for idx, (input, target, input_info) in enumerate(dataloader):
-        print(idx)
-        load_time = time.time() - start_time
-        print("load time:", load_time)
-        start_time = time.time()
+    if not is_pseudo:
+        for idx, (input, target, input_info) in enumerate(dataloader):
+            print(idx)
+            load_time = time.time() - start_time
+            print("load time:", load_time)
+            start_time = time.time()
 
-        print(input.shape)
-        print(target.shape)
-        # print(input_info)
-        break
+            print(input.shape)
+            print(target.shape)
+            # print(input_info)
+            break
+    else:
+        for idx, (input, target, pseudo_target, input_info) in enumerate(dataloader):
+            print(idx)
+            load_time = time.time() - start_time
+            print("load time:", load_time)
+            start_time = time.time()
+            for batch_idx in range(pseudo_target.shape[0]):
+                print("pseudo_target sum", (pseudo_target[batch_idx] != -1).sum())
+
+            print(input.shape)
+            print(target.shape)
+            print(pseudo_target.shape)
+            # print(input_info)
+            break

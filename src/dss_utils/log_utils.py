@@ -158,9 +158,9 @@ class WandbLogger:
         if self.wadnb_available:
             wandb.log(log_dict, step=epoch)  # type: ignore
 
-    def log_oofscore(self, epoch, score):
+    def log_oofscore(self, fold, score):
         if self.wadnb_available:
-            wandb.log({"oof_score": score}, step=epoch)
+            wandb.log({f"oof_score/{fold}": score})
 
     def log_overall_oofscore(self, score):
         if self.wadnb_available:
