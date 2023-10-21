@@ -23,7 +23,6 @@ from log_utils import AverageMeter, ProgressLogger, WandbLogger, init_logger
 from losses import get_class_criterion
 from postprocess import detect_event_from_classpred, make_submission_df
 from scheduler import get_optimizer, get_scheduler
-from train_valid_split import get_train_valid_key_df, get_train_valid_series_df
 
 
 def seed_everything(seed=42):
@@ -233,13 +232,22 @@ def training_loop(CFG, LOGGER):
 
         LOGGER.info(f"fold[{fold}] loading train/valid data")
         # separate train/valid data
-        train_key_df, valid_key_df = get_train_valid_key_df(key_df, fold, CFG)
-        train_series_df = get_train_valid_series_df(
-            series_df, key_df, fold, mode="train"
-        )
-        valid_series_df = get_train_valid_series_df(
-            series_df, key_df, fold, mode="valid"
-        )
+        # train_key_df, valid_key_df = get_train_valid_key_df(key_df, fold, CFG)
+        # train_series_df = get_train_valid_series_df(
+        #     series_df, key_df, fold, mode="train"
+        # )
+        # valid_series_df = get_train_valid_series_df(
+        #     series_df, key_df, fold, mode="valid"
+        # )
+        train_series_df = series_df[series_df["fold"] != fold]
+        train_key_df = key_df[
+            key_df["series_id"].isin(train_series_df["series_id"].unique())
+        ]
+
+        valid_series_df = series_df[series_df["fold"] == fold]
+        valid_key_df = key_df[
+            key_df["series_id"].isin(valid_series_df["series_id"].unique())
+        ]
         LOGGER.info(f"fold[{fold}] train data key num: {len(train_key_df)}")
         train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
         valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
@@ -312,7 +320,10 @@ def training_loop(CFG, LOGGER):
         oof_score = score(event_df_fold, oof_scoring_df)
         oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
-        oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
+        # oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
+        oof_dir = os.path.join(CFG.output_dir, "oof_", CFG.exp_name)
+        os.makedirs(oof_dir, exist_ok=True)
+        oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
         print("save oof_df to ", oof_df_fold_path)
         oof_df_fold.to_parquet(oof_df_fold_path)
         wandb_logger.log_oofscore(fold, oof_score)
@@ -329,6 +340,7 @@ def training_loop(CFG, LOGGER):
     # wandb_logger.log_overall_oofscore(oof_score)
     over_all_score_mean = np.mean(oof_score_list)
     LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
+    wandb_logger.log_overall_oofscore(over_all_score_mean)
     # oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
     # print("save oof_df to ", oof_df_path)
     # oof_df.to_parquet(oof_df_path)
@@ -354,7 +366,7 @@ if __name__ == "__main__":
             INPUT_DIR,
             "child-mind-institute-detect-sleep-states",
         )
-        OUTPUT_DIR = os.path.abspath(os.path.join(ROOT_DIR, "working", "debug"))
+        OUTPUT_DIR = os.path.abspath(os.path.join(ROOT_DIR, "working"))
         # TRAIN_DIR = os.path.join(COMPETITION_DIR, "train")
         # TEST_DIR = os.path.join(COMPETITION_DIR, "test")
         key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
