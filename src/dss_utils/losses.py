@@ -61,7 +61,7 @@ class NegativeIgnoreBCELoss(nn.Module):
         self.eps = eps
 
     def _get_masked_value(self, value, mask):
-        return torch.clip(value * mask, min=self.eps, max=1.0 - self.eps)
+        return torch.clamp(value * mask, min=self.eps, max=1.0 - self.eps)
 
     def forward(self, outputs, targets):
         # targetsの-1のところは無視する
@@ -69,20 +69,20 @@ class NegativeIgnoreBCELoss(nn.Module):
         neg_mask = (targets == 0.0).float()
         pos_masked_outputs = self._get_masked_value(positive_mask, outputs)
         pos_masked_targets = self._get_masked_value(positive_mask, targets)
-        neg_masked_outputs = self._get_masked_value(neg_mask, outputs)
+        neg_masked_outputs = self._get_masked_value(neg_mask, 1 - outputs)
         neg_masked_targets = self._get_masked_value(neg_mask, 1 - targets)
         # bceっぽい感じのpositivie 部分だけ計算するlossにする
-        pos_loss = -pos_masked_targets * torch.log(pos_masked_outputs + self.eps)
-        neg_loss = -neg_masked_targets * torch.log(1 - neg_masked_outputs + self.eps)
+        pos_loss = -pos_masked_targets * torch.log(pos_masked_outputs)
+        neg_loss = -neg_masked_targets * torch.log(neg_masked_outputs)
         loss = pos_loss + neg_loss
         return loss.mean()
 
 
 class PseudoNegativeIgnoreBCELoss(nn.Module):
-    def __init__(self, eps=1e-6, orig_loss_weight=0.2):
+    def __init__(self, orig_loss_weight=0.2, eps=1e-6):
         super(PseudoNegativeIgnoreBCELoss, self).__init__()
-        self.eps = eps
         self.orig_loss_weight = orig_loss_weight
+        self.eps = eps
 
     def _get_masked_value(self, value, mask):
         return torch.clip(value * mask, min=self.eps, max=1.0 - self.eps)
@@ -93,11 +93,11 @@ class PseudoNegativeIgnoreBCELoss(nn.Module):
         neg_mask = (targets == 0.0).float()
         pos_masked_outputs = self._get_masked_value(positive_mask, outputs)
         pos_masked_targets = self._get_masked_value(positive_mask, targets)
-        neg_masked_outputs = self._get_masked_value(neg_mask, outputs)
+        neg_masked_outputs = self._get_masked_value(neg_mask, 1 - outputs)
         neg_masked_targets = self._get_masked_value(neg_mask, 1 - targets)
         # bceっぽい感じのpositivie 部分だけ計算するlossにする
-        pos_loss = -pos_masked_targets * torch.log(pos_masked_outputs + self.eps)
-        neg_loss = -neg_masked_targets * torch.log(1 - neg_masked_outputs + self.eps)
+        pos_loss = -pos_masked_targets * torch.log(pos_masked_outputs)
+        neg_loss = -neg_masked_targets * torch.log(neg_masked_outputs)
         orig_loss = pos_loss + neg_loss
         # pseudo_loss original が-1のところだけ計算する。
         # pseudo labelも-1のところは無視する
@@ -105,20 +105,16 @@ class PseudoNegativeIgnoreBCELoss(nn.Module):
         ps_neg_mask = (pseudo_targets == 0.0).float() * (targets == -1).float()
         ps_pos_masked_outputs = self._get_masked_value(ps_positive_mask, outputs)
         ps_pos_masked_targets = self._get_masked_value(ps_positive_mask, pseudo_targets)
-        ps_neg_masked_outputs = self._get_masked_value(ps_neg_mask, outputs)
+        ps_neg_masked_outputs = self._get_masked_value(ps_neg_mask, 1 - outputs)
         ps_neg_masked_targets = self._get_masked_value(ps_neg_mask, 1 - pseudo_targets)
-        ps_pos_loss = -ps_pos_masked_targets * torch.log(
-            ps_pos_masked_outputs + self.eps
-        )
-        ps_neg_loss = -ps_neg_masked_targets * torch.log(
-            1 - ps_neg_masked_outputs + self.eps
-        )
+        ps_pos_loss = -ps_pos_masked_targets * torch.log(ps_pos_masked_outputs)
+        ps_neg_loss = -ps_neg_masked_targets * torch.log(ps_neg_masked_outputs)
 
         pseudo_loss = ps_pos_loss + ps_neg_loss
 
         # 過学習防止にoriginalにはweightをかけて小さめにしてみる
-        loss = self.orig_loss_weight * orig_loss.mean() + pseudo_loss.mean()
-        return loss
+        loss = (self.orig_loss_weight * orig_loss) + pseudo_loss
+        return loss.mean()
 
 
 def get_class_criterion(CFG):
@@ -155,7 +151,7 @@ def get_pseudo_criterion(CFG):
     if hasattr(CFG, "orig_loss_weight"):
         orig_loss_weight = CFG.orig_loss_weight
     else:
-        orig_loss_weight = 0.2
+        orig_loss_weight = 0.8
     criterion = PseudoNegativeIgnoreBCELoss(orig_loss_weight)
     return criterion
 
@@ -177,7 +173,8 @@ if __name__ == "__main__":
 
     # preds = torch.rand(1, 2, 3)
     # preds = torch.tensor([[[0.8, 0.1, 0.1], [0.1, 0.1, 0.8]]])
-    preds = torch.tensor([[[0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]])
+    # preds = torch.tensor([[[0.1, 0.8, 0.1], [0.1, 0.1, 0.8]]])
+    preds = torch.tensor([[[0.2, 0.7, 0.2], [0.1, 0.1, 0.8]]])
     print("before preds", preds)
     # targets = torch.rand(1, 2, 3)
     # print("before targets", targets)
