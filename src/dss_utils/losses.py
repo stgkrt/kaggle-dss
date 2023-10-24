@@ -60,8 +60,8 @@ class NegativeIgnoreBCELoss(nn.Module):
         super(NegativeIgnoreBCELoss, self).__init__()
         self.eps = eps
 
-    def _get_masked_value(self, value, mask):
-        return torch.clamp(value * mask, min=self.eps, max=1.0 - self.eps)
+    def _get_masked_value(self, mask, value):
+        return torch.clip(value * mask, min=self.eps, max=1.0 - self.eps)
 
     def forward(self, outputs, targets):
         # targetsの-1のところは無視する
