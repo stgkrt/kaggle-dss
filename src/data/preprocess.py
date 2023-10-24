@@ -57,6 +57,22 @@ def preprocess_input(train_series_: pd.DataFrame) -> pd.DataFrame:
         .mean()
         .reset_index(0, drop=True)
     )
+    train_series_["anglez_std"] = (
+        train_series_.groupby("series_id")["anglez"]
+        .rolling(101, center=True)
+        .std()
+        .reset_index(0, drop=True)
+    )
+    train_series_["enmo_std"] = (
+        train_series_.groupby("series_id")["enmo"]
+        .rolling(101, center=True)
+        .std()
+        .reset_index(0, drop=True)
+    )
+    train_series_["anglez_ave"] = train_series_["anglez_ave"].fillna(0)
+    train_series_["enmo_ave"] = train_series_["enmo_ave"].fillna(0)
+    train_series_["anglez_std"] = train_series_["anglez_std"].fillna(0)
+    train_series_["enmo_std"] = train_series_["enmo_std"].fillna(0)
 
     return train_series_
 
@@ -87,6 +103,7 @@ def set_train_groupby_label(
     train_event_["event"] = train_event_["event"].map(
         {"onset": 0, "wakeup": 1, "unknown_onset": -1, "unknown_wakeup": -1}
     )
+    train_event_["event"] = train_event_["event"].fillna(-1)
 
     # series_idとstepでmergeする
     print("merge series_id and step")
@@ -97,9 +114,11 @@ def set_train_groupby_label(
         how="left",
     )
     print("fill event")
+    # df["event"] = df["event"].fillna(-1)
     df["event_onset"] = df["event"].apply(lambda x: 1 if x == 0 else 0)
     df["event_wakeup"] = df["event"].apply(lambda x: 1 if x == 1 else 0)
     df = df.bfill(axis="rows")
+    df["event"] = df["event"].fillna(-1)
     return df
 
 
@@ -147,6 +166,7 @@ def pseudo_count_by_seires_date_key(train_series_: pd.DataFrame) -> pd.DataFrame
     train_series_["pseudo_count"] = train_series_.groupby("series_date_key")[
         "event"
     ].apply(lambda x: (x == -1).sum())
+    train_series_["pseudo_count"] = train_series_["pseudo_count"].fillna(0)
     train_series_["is_pseudo_target"] = (train_series_["pseudo_count"] > 0).astype(
         "int8"
     )
@@ -164,18 +184,23 @@ if __name__ == "__main__":
     )
     print("preprocessing data...")
     preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
+    print("preprocessed_df", preprocessed_df.isna().sum())
     print(preprocessed_df.head())
     preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
-
+    print("preprocessed_df", preprocessed_df.isna().sum())
     preprocessed_df.to_parquet(
         "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
     )
 
-    # preprocessed_df.to_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
+    # train_series_df = pd.read_parquet(
+    #     "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
+    # )
+    # print(train_series_df.isna().sum())
     # train_series_df = pseudo_count_by_seires_date_key(train_series_df)
+    # print(train_series_df.isna().sum())
     # print(train_series_df.head())
     # train_series_df.to_parquet(
-    #     "/kaggle/input/preprocessed_train_series_le_50_fold_pseudo.parquet"
+    #     "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
     # )
     # train_series_df.to_csv(
     #     "/kaggle/input/preprocessed_train_series_le_50_fold_pseudo.csv"

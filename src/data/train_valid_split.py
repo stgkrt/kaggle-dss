@@ -44,10 +44,11 @@ if __name__ == "__main__":
     )
     series_df = pd.read_parquet(filename)
     print("series_df loaded.")
-    train_seires_unique = series_df["series_id"].unique()
-    train_seires_unique = train_seires_unique[:50]
-    series_df = series_df[series_df["series_id"].isin(train_seires_unique)]
-    print("series_df", series_df.head())
+    series_df["event"] = series_df["event"].fillna(-1)
+    # train_seires_unique = series_df["series_id"].unique()
+    # train_seires_unique = train_seires_unique[:50]
+    # # series_df = series_df[series_df["series_id"].isin(train_seires_unique)]
+    # print("series_df", series_df.head())
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     print("key_df from series_df", key_df.head())
     key_df = key_df.reset_index(drop=True)
@@ -63,4 +64,5 @@ if __name__ == "__main__":
         series_ids = key_df[key_df["fold"] == fold]["series_id"].unique()
         series_df.loc[series_df["series_id"].isin(series_ids), "fold"] = fold
 
+    print("series_df", series_df.isna().sum())
     series_df.to_parquet(output_filename)
