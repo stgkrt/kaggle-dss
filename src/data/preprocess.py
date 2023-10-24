@@ -43,6 +43,21 @@ def preprocess_input(train_series_: pd.DataFrame) -> pd.DataFrame:
     )
     train_series_["anglez_absdiff_ave"] = train_series_["anglez_absdiff_ave"].fillna(0)
     train_series_["enmo_absdiff_ave"] = train_series_["enmo_absdiff_ave"].fillna(0)
+    # anglezとenmoのrolling meanとrolling stdを取る
+    print("get anglez and enmo rolling mean and std")
+    train_series_["anglez_ave"] = (
+        train_series_.groupby("series_id")["anglez"]
+        .rolling(101, center=True)
+        .mean()
+        .reset_index(0, drop=True)
+    )
+    train_series_["enmo_ave"] = (
+        train_series_.groupby("series_id")["enmo"]
+        .rolling(101, center=True)
+        .mean()
+        .reset_index(0, drop=True)
+    )
+
     return train_series_
 
 
@@ -127,10 +142,22 @@ def preprocess_train_series(
     return train_series_
 
 
+def pseudo_count_by_seires_date_key(train_series_: pd.DataFrame) -> pd.DataFrame:
+    # series date keyごとにclass targetの-1の数を数える
+    train_series_["pseudo_count"] = train_series_.groupby("series_date_key")[
+        "event"
+    ].apply(lambda x: (x == -1).sum())
+    train_series_["is_pseudo_target"] = (train_series_["pseudo_count"] > 0).astype(
+        "int8"
+    )
+    return train_series_
+
+
 if __name__ == "__main__":
     print("load data")
     train_series_df = pd.read_parquet(
         "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
+        # "/kaggle/input/preprocessed_train_series_le_50_fold.parquet"
     )
     train_event_df = pd.read_csv(
         "input/child-mind-institute-detect-sleep-states/train_events.csv"
@@ -138,5 +165,18 @@ if __name__ == "__main__":
     print("preprocessing data...")
     preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
     print(preprocessed_df.head())
+    preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
+
+    preprocessed_df.to_parquet(
+        "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
+    )
 
     # preprocessed_df.to_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
+    # train_series_df = pseudo_count_by_seires_date_key(train_series_df)
+    # print(train_series_df.head())
+    # train_series_df.to_parquet(
+    #     "/kaggle/input/preprocessed_train_series_le_50_fold_pseudo.parquet"
+    # )
+    # train_series_df.to_csv(
+    #     "/kaggle/input/preprocessed_train_series_le_50_fold_pseudo.csv"
+    # )

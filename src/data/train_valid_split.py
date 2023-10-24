@@ -38,7 +38,11 @@ if __name__ == "__main__":
     # series_df = pd.read_parquet(
     #     "/kaggle/input/preprocessed_train_series_le_200.parquet"
     # )
-    series_df = pd.read_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
+    filename = "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
+    output_filename = (
+        "/kaggle/input/preprocessed_train_series_6ch_lepseudo_fold.parquet"
+    )
+    series_df = pd.read_parquet(filename)
     print("series_df loaded.")
     train_seires_unique = series_df["series_id"].unique()
     train_seires_unique = train_seires_unique[:50]
@@ -59,4 +63,4 @@ if __name__ == "__main__":
         series_ids = key_df[key_df["fold"] == fold]["series_id"].unique()
         series_df.loc[series_df["series_id"].isin(series_ids), "fold"] = fold
 
-    series_df.to_parquet("/kaggle/input/preprocessed_train_series_le_50_fold.parquet")
+    series_df.to_parquet(output_filename)

@@ -94,7 +94,6 @@ class DSSAddRolldiffDataset(Dataset):
     def __init__(
         self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
     ) -> None:
-        print(mode)
         if mode == "train" or mode == "valid":
             self.use_col = [
                 "series_date_key",
@@ -104,6 +103,8 @@ class DSSAddRolldiffDataset(Dataset):
                 "enmo",
                 "anglez_absdiff_ave",
                 "enmo_absdiff_ave",
+                "anglez_ave",
+                "enmo_ave",
             ]
         else:
             self.use_col = [
@@ -113,6 +114,8 @@ class DSSAddRolldiffDataset(Dataset):
                 "enmo",
                 "anglez_absdiff_ave",
                 "enmo_absdiff_ave",
+                "anglez_ave",
+                "enmo_ave",
             ]
 
         self.key_df = key_df["series_date_key"].values
@@ -146,7 +149,14 @@ class DSSAddRolldiffDataset(Dataset):
 
     def _get_rolldiff_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
         input_data = series_df_[
-            ["anglez", "enmo", "anglez_absdiff_ave", "enmo_absdiff_ave"]
+            [
+                "anglez",
+                "enmo",
+                "anglez_absdiff_ave",
+                "enmo_absdiff_ave",
+                "anglez_ave",
+                "enmo_ave",
+            ]
         ].values.T
         input_data = self._padding_data_to_same_length(input_data)
         input_data = torch.tensor(input_data, dtype=torch.float16)
@@ -223,15 +233,15 @@ class DSSPseudoDataset(Dataset):
         target = series_df_["class_pseudo_pred"].values
         target = target.reshape(1, -1)  # [channel=1, data_length]
         # 0.5-threshold ~ 0.5+thresholdの値は-1にする
-        condition_ignore = (0.5 - self.pseudo_threshold <= target) & (
-            target <= 0.5 + self.pseudo_threshold
+        condition_ignore = (0.5 - self.pseudo_threshold < target) & (
+            target < 0.5 + self.pseudo_threshold
         )
         target = np.where(condition_ignore, -np.ones_like(target), target)
         # pseudo_threshold以下の値は0、0.5+pseudo_threshold以上の値は1にする
         condition_zero = (0.0 <= target) & (target <= 0.5 - self.pseudo_threshold)
         target = np.where(condition_zero, np.zeros_like(target), target)
         target = np.where(
-            target > 0.5 + self.pseudo_threshold, np.ones_like(target), target
+            target >= 0.5 + self.pseudo_threshold, np.ones_like(target), target
         )
         # if target.sum() == 0:
         #     raise ValueError("pseudo target is all zero.")
@@ -375,7 +385,7 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
         if hasattr(CFG, "pseudo_threshold"):
             pseudo_threshold = CFG.pseudo_threshold
         else:
-            pseudo_threshold = 0.3
+            pseudo_threshold = 0.0
         dataset = DSSPseudoDataset(key_df, series_df, mode, pseudo_threshold)
     else:
         if CFG.model_type == "event_output":

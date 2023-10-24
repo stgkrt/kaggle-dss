@@ -227,17 +227,39 @@ class DSSUTimeModel(nn.Module):
         self.head = nn.Sequential(
             nn.Conv1d(
                 config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
                 config.class_output_channels,
-                kernel_size=5,
+                kernel_size=3,
                 padding="same",
             ),
             # nn.Softmax(dim=1),
             nn.Sigmoid(),
         )
+        if hasattr(config, "ave_kernel_size"):
+            ave_kernel_size = config.ave_kernel_size
+        else:
+            ave_kernel_size = 301  # 300で5minぐらい？1800は30minぐらい？
+        ave_stride = 1
+        ave_padding = int((ave_kernel_size - ave_stride) / 2)
         self.class_avg_pool = nn.AvgPool1d(
-            kernel_size=11,
-            stride=1,
-            padding=5,
+            kernel_size=ave_kernel_size,
+            stride=ave_stride,
+            padding=ave_padding,
         )
 
     def _get_skip_connections_length(self):
