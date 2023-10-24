@@ -5,7 +5,7 @@ import torch.nn as nn
 
 # 1step 0.5secで30minなら60*30=1800step
 # metric的にいっぱい検出してもいい？とりあえず小さめで
-def detect_event_from_classpred(df, N=200, maxpool_kernel_size=101, maxpool_stride=1):
+def detect_event_from_classpred(df, N=300, maxpool_kernel_size=41, maxpool_stride=1):
     df = df.copy()
 
     # series_idでgroupbyして、class_predに対して対象の列のデータから前のN個の列までのデータの平均をとる
@@ -36,7 +36,7 @@ def detect_event_from_classpred(df, N=200, maxpool_kernel_size=101, maxpool_stri
     return df
 
 
-def make_submission_df(df, threshold=0.1):
+def make_submission_df(df, threshold=0.01):
     df = df[["series_id", "step", "event_pred"]].copy()
     # thresholdより大きいときは1,-thresholdより小さいときは-1,それ以外は0
     df["event"] = df["event_pred"].apply(
