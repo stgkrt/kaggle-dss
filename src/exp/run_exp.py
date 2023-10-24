@@ -73,7 +73,8 @@ def parse_args():
             root_dir,
             "input",
             # "preprocessed_train_series_le_fold.parquet",
-            "preprocessed_train_series_le_50_fold.parquet",
+            "preprocessed_train_series_6ch_lepseudo_fold.parquet",
+            # "preprocessed_train_series_le_50_fold.parquet",
         ),
     )
     parser.add_argument(
@@ -91,8 +92,8 @@ def parse_args():
     parser.add_argument("--n_folds", type=int, default=5)
     parser.add_argument("--folds", type=int, nargs="*", default=[0])
     parser.add_argument("--seed", type=int, default=42)
-    # parser.add_argument("--num_workers", type=int, default=os.cpu_count())
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--num_workers", type=int, default=os.cpu_count())
+    # parser.add_argument("--num_workers", type=int, default=2)
 
     # model
     parser.add_argument("--model_type", type=str, default="add_rolldiff")
@@ -100,6 +101,7 @@ def parse_args():
     parser.add_argument("--class_output_channels", type=int, default=1)
     parser.add_argument("--event_output_channels", type=int, default=2)
     parser.add_argument("--embedding_base_channels", type=int, default=16)
+    parser.add_argument("--ave-kernel-size", type=int, default=11)
     parser.add_argument("--pseudo_weight_exp", type=str, default="exp003")
 
     # training setting
@@ -140,4 +142,3 @@ if __name__ == "__main__":
         training_loop(config, logger)
     elif config.train_mode == "pseudo":
         pseudo_training_loop(config, logger)
-    training_loop(config, logger)

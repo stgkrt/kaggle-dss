@@ -36,6 +36,18 @@ def seed_everything(seed=42):
     torch.use_deterministic_algorithms = True
 
 
+def get_pseudo_target_key_list(series_df: pd.DataFrame) -> list:
+    series_df["is_unknown"] = (series_df["event"] == -1).astype(int)
+    series_df["pseudo_count"] = series_df.groupby("series_date_key")[
+        "is_unknown"
+    ].transform("sum")
+    series_df["is_pseudo_target"] = (series_df["pseudo_count"] > 0).astype("int8")
+    pseudo_target_key_list = series_df[series_df["is_pseudo_target"] > 0][
+        "series_date_key"
+    ].unique()
+    return pseudo_target_key_list
+
+
 # TODO:loaderからtargetとpsudo targetを取り出すように変更する
 def pseudo_train_fn(CFG, epoch, model, train_loader, criterion, optimizer, LOGGER):
     model.train()
@@ -148,7 +160,7 @@ def get_pseudo_df(
     valid_input_info_dict: dict,
     valid_preds_dict: dict,
     oof_df_fold: pd.DataFrame,
-    pseudo_threshold: float = 0.3,
+    pseudo_threshold: float = 0.15,
 ) -> pd.DataFrame:
     start_time = time.time()
     print("creating oof_df", end=" ... ")
@@ -184,7 +196,7 @@ def get_pseudo_df(
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
         oof_df_fold.loc[data_condition, "class_pseudo_pred"] = class_pred
-        if idx % 1000 == 0 or idx == data_length - 1:
+        if idx % 500 == 0 or idx == data_length - 1:
             elapsed = int(time.time() - start_time) / 60
             print(f" >>{idx}/{data_length}. elapsed time: {elapsed:.2f} min")
 
@@ -277,8 +289,15 @@ def predict(CFG, model, infer_loader):
 
 def set_pseudo_label(CFG, LOGGER, model, series_df, key_df):
     start_time = time.time()
+    pseudo_target_key_list = get_pseudo_target_key_list(series_df)
+    LOGGER.info(f"pseudo_target_key_list num: {len(pseudo_target_key_list)}")
+    series_df["class_pseudo_pred"] = series_df["event"]
+    pseudo_series_df = series_df[
+        series_df["series_date_key"].isin(pseudo_target_key_list)
+    ]
+    pseudo_key_df = key_df[key_df["series_date_key"].isin(pseudo_target_key_list)]
     # get loader
-    pseudo_loader = get_loader(CFG, key_df, series_df, mode="test")
+    pseudo_loader = get_loader(CFG, pseudo_key_df, pseudo_series_df, mode="test")
     # predict
     LOGGER.info("predicting pseudo label")
     pseudo_predictions, pseudo_input_info = predict(CFG, model, pseudo_loader)
@@ -367,12 +386,14 @@ def pseudo_training_loop(CFG, LOGGER):
         #         "anglez_absdiff": np.float64,
         #         "enmo_absdiff": np.float64,
         #         "step": np.int64,
-        #         "class_pseudo_label": np.float64,
+        #         # "class_pseudo_label": np.float64,
         #         "series_date_key": np.int64,
         #     }
         # )
         # train_series_df.to_parquet(
-        #     os.path.join(CFG.exp_dir, f"pseudo_train_series_fold{fold}_le20.parquet")
+        #     os.path.join(
+        #         CFG.exp_dir, f"pseudo_train_series_fold{fold}_6chpseudo.parquet"
+        #     )
         # )
         # continue
         for epoch in range(0, CFG.n_epoch):
@@ -438,8 +459,10 @@ def pseudo_training_loop(CFG, LOGGER):
         oof_score = score(event_df_fold, oof_scoring_df)
         oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
+        oof_df_fold_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
+        os.makedirs(oof_df_fold_dir, exist_ok=True)
         oof_df_fold_path = os.path.join(
-            CFG.output_dir, "_oof", CFG.exp_name, f"oof_df_pseudo_fold{fold}.parquet"
+            oof_df_fold_dir, f"oof_df_pseudo_fold{fold}.parquet"
         )
         print("save oof_df to ", oof_df_fold_path)
         oof_df_fold.to_parquet(oof_df_fold_path)
@@ -474,7 +497,7 @@ if __name__ == "__main__":
         exp_dir = os.path.join(output_dir, exp_name)
 
         series_df = os.path.join(
-            input_dir, "preprocessed_train_series_le_50_fold.parquet"
+            input_dir, "preprocessed_train_series_6ch_lepseudo_fold.parquet"
         )
         event_df = os.path.join(competition_dir, "train_events.csv")
         # data
@@ -491,13 +514,13 @@ if __name__ == "__main__":
         class_output_channels = 1
         event_output_channels = 2
         embedding_base_channels = 16
-        pseudo_weight_exp = "exp003"
+        pseudo_weight_exp = "exp006_addlayer"
 
         class_loss_weight = 1.0
         event_loss_weight = 100.0
 
         # training
-        n_epoch = 5
+        n_epoch = 2
         batch_size = 32
         # batch_size = 128
         # optimizer
