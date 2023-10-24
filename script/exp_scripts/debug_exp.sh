@@ -1,3 +1,7 @@
 
-python src/exp/run_exp.py --train_mode pseudo
-                        --exp_name debug_pseudo
+python src/exp/run_exp.py --exp_name debug \
+                        --input_channels 6
+
+
+# python src/exp/run_exp.py  --train-mode pseudo \
+#                             --exp_name pseudo_debug
