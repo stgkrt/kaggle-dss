@@ -105,6 +105,8 @@ class DSSAddRolldiffDataset(Dataset):
                 "enmo_absdiff_ave",
                 "anglez_ave",
                 "enmo_ave",
+                "anglez_std",
+                "enmo_std",
             ]
         else:
             self.use_col = [
@@ -116,6 +118,8 @@ class DSSAddRolldiffDataset(Dataset):
                 "enmo_absdiff_ave",
                 "anglez_ave",
                 "enmo_ave",
+                "anglez_std",
+                "enmo_std",
             ]
 
         self.key_df = key_df["series_date_key"].values
@@ -156,6 +160,8 @@ class DSSAddRolldiffDataset(Dataset):
                 "enmo_absdiff_ave",
                 "anglez_ave",
                 "enmo_ave",
+                "anglez_std",
+                "enmo_std",
             ]
         ].values.T
         input_data = self._padding_data_to_same_length(input_data)
