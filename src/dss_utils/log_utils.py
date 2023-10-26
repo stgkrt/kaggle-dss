@@ -34,12 +34,12 @@ def save_config(configs):
 def set_wandb_make_dir(configs):
     configs.exp_dir = os.path.join(configs.output_dir, configs.exp_name)
     if "debug" in configs.exp_name:  # folderはdebug用で上書きOK。wandbも記録しない。
-        configs.folds = [0]
+        # configs.folds = [0]
         os.makedirs(configs.exp_dir, exist_ok=True)
         configs.wandb_available = False
         # configs.wandb_available = True
     elif "check" in configs.exp_name:  # folderはdebug用で上書きOK。wandbは記録する。
-        configs.folds = [0]
+        # configs.folds = [0]
         os.makedirs(configs.exp_dir, exist_ok=True)
         configs.wandb_available = True
     else:
@@ -160,7 +160,7 @@ class WandbLogger:
 
     def log_oofscore(self, fold, score):
         if self.wadnb_available:
-            wandb.log({f"oof_score/{fold}": score})
+            wandb.log({"oof_score": score, "fold": fold})
 
     def log_overall_oofscore(self, score):
         if self.wadnb_available:
