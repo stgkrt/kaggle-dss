@@ -187,28 +187,29 @@ def get_oof_df(
             print("len(class_target)", len(class_target))
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
-        oof_df_fold.loc[data_condition] = oof_df_fold.loc[data_condition].assign(
-            class_pred=class_pred,
-            class_target=class_target,
-            steps=steps,
-        )
+        oof_df_fold.loc[data_condition, "class_pred"] = class_pred
+        oof_df_fold.loc[data_condition, "class_target"] = class_target
 
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
     return oof_df_fold
 
 
-def training_loop(CFG, LOGGER):
-    # key_df = pd.read_csv(CFG.key_df)
-    LOGGER.info("loading series_df")
-    series_df = pd.read_parquet(CFG.series_df)
-
+def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     key_df = key_df.reset_index(drop=True)
     key_df["series_id"], key_df["date"] = (
         key_df["series_date_key_str"].str.split("_", 1).str
     )
     key_df = key_df.drop(columns=["series_date_key_str"], axis=1)
+    return key_df
+
+
+def training_loop(CFG, LOGGER):
+    # key_df = pd.read_csv(CFG.key_df)
+    LOGGER.info("loading series_df")
+    series_df = pd.read_parquet(CFG.series_df)
+    key_df = get_key_df(series_df)
 
     LOGGER.info("series_df data num : {}".format(len(series_df)))
     LOGGER.info("key_df data num : {}".format(len(key_df)))
@@ -240,14 +241,19 @@ def training_loop(CFG, LOGGER):
         #     series_df, key_df, fold, mode="valid"
         # )
         train_series_df = series_df[series_df["fold"] != fold]
-        train_key_df = key_df[
-            key_df["series_id"].isin(train_series_df["series_id"].unique())
-        ]
-
+        train_key_df = get_key_df(train_series_df)
+        if len(train_series_df["series_date_key"].unique()) != len(train_key_df):
+            raise ValueError("train data key num is not same")
         valid_series_df = series_df[series_df["fold"] == fold]
-        valid_key_df = key_df[
-            key_df["series_id"].isin(valid_series_df["series_id"].unique())
-        ]
+        valid_key_df = get_key_df(valid_series_df)
+        if len(valid_series_df["series_date_key"].unique()) != len(valid_key_df):
+            raise ValueError("valid data key num is not same")
+        train_key_num = len(train_key_df)
+        valid_key_num = len(valid_key_df)
+        LOGGER.info(f"fold[{fold}] train data key num: {train_key_num}")
+        LOGGER.info(f"fold[{fold}] valid data key num: {valid_key_num}")
+        if train_key_num + valid_key_num != len(key_df):
+            raise ValueError("train/valid data key num is not same")
         LOGGER.info(f"fold[{fold}] train data key num: {len(train_key_df)}")
         train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
         valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
@@ -306,31 +312,49 @@ def training_loop(CFG, LOGGER):
         # model save
         model_path = os.path.join(CFG.exp_dir, f"fold{fold}_model.pth")
         torch.save(model.state_dict(), model_path)
-
+        if len(oof_df_fold["series_date_key"].unique()) != len(
+            valid_series_df["series_date_key"].unique()
+        ):
+            raise ValueError("oof data key num is not same")
+        del (
+            model,
+            train_loader,
+            valid_loader,
+            train_series_df,
+            valid_series_df,
+            train_key_df,
+        )
+        gc.collect()
+        torch.cuda.empty_cache()
+        LOGGER.info(f"fold{fold} model saved.")
         oof_df_fold = get_oof_df(
             input_info_dict_list,
             valid_predictions,
             valid_targets,
             oof_df_fold,
         )
+        LOGGER.info(f"fold{fold} oof_df created.")
         oof_df_fold = detect_event_from_classpred(oof_df_fold)
+
+        oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
+        os.makedirs(oof_dir, exist_ok=True)
+        oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
+        print("save oof_df to ", oof_df_fold_path)
+        oof_df_fold.to_parquet(oof_df_fold_path)
+        LOGGER.info(f"fold{fold} event detected.")
         oof_scoring_df = make_submission_df(oof_df_fold)
+        LOGGER.info(f"fold{fold} submission df created.")
+        del oof_df_fold
+        gc.collect()
+
         event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
         event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
         oof_score = score(event_df_fold, oof_scoring_df)
         oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
         # oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
-        oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
-        os.makedirs(oof_dir, exist_ok=True)
-        oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
-        print("save oof_df to ", oof_df_fold_path)
-        oof_df_fold.to_parquet(oof_df_fold_path)
-        wandb_logger.log_oofscore(fold, oof_score)
-        del model, train_loader, valid_loader
-        gc.collect()
-        torch.cuda.empty_cache()
 
+        wandb_logger.log_oofscore(fold, oof_score)
     # oof_df = detect_event_from_classpred(oof_df)
     # oof_scoring_df = make_submission_df(oof_df)
     # event_df = event_df[event_df["series_id"].isin(oof_scoring_df["series_id"])]

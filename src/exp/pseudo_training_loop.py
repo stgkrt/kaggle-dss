@@ -252,11 +252,9 @@ def get_oof_df(
             print("len(class_target)", len(class_target))
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
-        oof_df_fold.loc[data_condition] = oof_df_fold.loc[data_condition].assign(
-            class_pred=class_pred,
-            class_target=class_target,
-            steps=steps,
-        )
+
+        oof_df_fold.loc[data_condition, "class_pred"] = class_pred
+        oof_df_fold.loc[data_condition, "class_target"] = class_target
 
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
