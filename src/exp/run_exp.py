@@ -7,7 +7,7 @@ from pseudo_training_loop import pseudo_training_loop
 from training_loop import seed_everything, training_loop
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from dss_utils.log_utils import init_logger, save_config, set_wandb_make_dir
+from logger import init_logger, save_config, set_wandb_make_dir
 
 os.environ["WANDB_SILENT"] = "true"
 os.environ["WANDB_MODE"] = "offline"

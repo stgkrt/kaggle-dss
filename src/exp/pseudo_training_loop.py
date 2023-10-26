@@ -19,7 +19,7 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 from dss_dataloader import get_loader
 from dss_metrics import score
 from dss_model import get_model
-from log_utils import AverageMeter, ProgressLogger, WandbLogger, init_logger
+from logger import AverageMeter, ProgressLogger, WandbLogger, init_logger
 from losses import get_class_criterion, get_pseudo_criterion
 from postprocess import detect_event_from_classpred, make_submission_df
 from scheduler import get_optimizer, get_scheduler

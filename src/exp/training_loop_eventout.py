@@ -17,7 +17,7 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 
 from dss_dataloader import get_loader
 from dss_model import get_model
-from log_utils import AverageMeter, ProgressLogger, init_logger
+from logger import AverageMeter, ProgressLogger, init_logger
 from losses import get_class_criterion, get_event_criterion
 from scheduler import get_optimizer, get_scheduler
 from train_valid_split import get_train_valid_key_df, get_train_valid_series_df
