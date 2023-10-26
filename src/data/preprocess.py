@@ -175,33 +175,29 @@ def pseudo_count_by_seires_date_key(train_series_: pd.DataFrame) -> pd.DataFrame
 
 if __name__ == "__main__":
     print("load data")
-    train_series_df = pd.read_parquet(
-        "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
-        # "/kaggle/input/preprocessed_train_series_le_50_fold.parquet"
-    )
-    train_event_df = pd.read_csv(
-        "input/child-mind-institute-detect-sleep-states/train_events.csv"
-    )
-    print("preprocessing data...")
-    preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
-    print("preprocessed_df", preprocessed_df.isna().sum())
-    print(preprocessed_df.head())
-    preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
-    print("preprocessed_df", preprocessed_df.isna().sum())
-    preprocessed_df.to_parquet(
-        "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
-    )
-
     # train_series_df = pd.read_parquet(
+    #     "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
+    #     # "/kaggle/input/preprocessed_train_series_le_50_fold.parquet"
+    # )
+    # train_event_df = pd.read_csv(
+    #     "input/child-mind-institute-detect-sleep-states/train_events.csv"
+    # )
+    # print("preprocessing data...")
+    # preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
+    # print("preprocessed_df", preprocessed_df.isna().sum())
+    # print(preprocessed_df.head())
+    # preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
+    # print("preprocessed_df", preprocessed_df.isna().sum())
+    # preprocessed_df.to_parquet(
     #     "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
     # )
-    # print(train_series_df.isna().sum())
-    # train_series_df = pseudo_count_by_seires_date_key(train_series_df)
-    # print(train_series_df.isna().sum())
-    # print(train_series_df.head())
-    # train_series_df.to_parquet(
-    #     "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
-    # )
-    # train_series_df.to_csv(
-    #     "/kaggle/input/preprocessed_train_series_le_50_fold_pseudo.csv"
-    # )
+
+    train_series_df = pd.read_parquet(
+        "/kaggle/input/preprocessed_train_series_le_fold.parquet"
+    )
+    print(train_series_df.isna().sum())
+    train_series_df["event"] = train_series_df["event"].fillna(-1)
+    train_series_df = pseudo_count_by_seires_date_key(train_series_df)
+    print(train_series_df.isna().sum())
+    print(train_series_df.head())
+    train_series_df.to_csv("/kaggle/input/preprocessed_train_series_le_fold_pseudo.csv")
