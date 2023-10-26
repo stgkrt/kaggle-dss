@@ -72,8 +72,8 @@ def parse_args():
         default=os.path.join(
             root_dir,
             "input",
-            # "preprocessed_train_series_le_fold.parquet",
-            "preprocessed_train_series_6ch_lepseudo_fold.parquet",
+            "preprocessed_train_series_le_fold.parquet",
+            # "preprocessed_train_series_6ch_lepseudo_fold.parquet",
             # "preprocessed_train_series_le_50_fold.parquet",
         ),
     )
@@ -92,8 +92,8 @@ def parse_args():
     parser.add_argument("--n_folds", type=int, default=5)
     parser.add_argument("--folds", type=int, nargs="*", default=[0])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_workers", type=int, default=os.cpu_count())
-    # parser.add_argument("--num_workers", type=int, default=2)
+    # parser.add_argument("--num_workers", type=int, default=os.cpu_count())
+    parser.add_argument("--num_workers", type=int, default=2)
 
     # model
     parser.add_argument("--model_type", type=str, default="add_rolldiff")
@@ -106,7 +106,7 @@ def parse_args():
 
     # training setting
     parser.add_argument("--n_epoch", type=int, default=2)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-6)
     parser.add_argument("--T_0", type=int, default=10)
