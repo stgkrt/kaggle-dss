@@ -250,17 +250,17 @@ class DSSUTimeModel(nn.Module):
             # nn.Softmax(dim=1),
             nn.Sigmoid(),
         )
-        if hasattr(config, "ave_kernel_size"):
-            ave_kernel_size = config.ave_kernel_size
-        else:
-            ave_kernel_size = 301  # 300で5minぐらい？1800は30minぐらい？
-        ave_stride = 1
-        ave_padding = int((ave_kernel_size - ave_stride) / 2)
-        self.class_avg_pool = nn.AvgPool1d(
-            kernel_size=ave_kernel_size,
-            stride=ave_stride,
-            padding=ave_padding,
-        )
+        # if hasattr(config, "ave_kernel_size"):
+        #     ave_kernel_size = config.ave_kernel_size
+        # else:
+        #     ave_kernel_size = 301  # 300で5minぐらい？1800は30minぐらい？
+        # ave_stride = 1
+        # ave_padding = int((ave_kernel_size - ave_stride) / 2)
+        # self.class_avg_pool = nn.AvgPool1d(
+        #     kernel_size=ave_kernel_size,
+        #     stride=ave_stride,
+        #     padding=ave_padding,
+        # )
 
     def _get_skip_connections_length(self):
         # return [20, 125, 1000, 10000]
@@ -271,7 +271,7 @@ class DSSUTimeModel(nn.Module):
         x = self.neck_conv(x)
         x = self.decoder(x, skip_connetctions)
         class_output = self.head(x)
-        class_output = self.class_avg_pool(class_output)
+        # class_output = self.class_avg_pool(class_output)
         return class_output
 
 
