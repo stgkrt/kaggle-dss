@@ -90,6 +90,124 @@ class DSSDataset(Dataset):
             return input, target, input_info_dict
 
 
+class DSSMeanStdsDataset(Dataset):
+    def __init__(
+        self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
+    ) -> None:
+        if mode == "train" or mode == "valid":
+            self.use_col = [
+                "series_date_key",
+                "step",
+                "event",
+                "anglez",
+                "enmo",
+            ]
+        else:
+            self.use_col = [
+                "series_date_key",
+                "step",
+                "anglez",
+                "enmo",
+            ]
+        self.mean_std_rollnum_list = [15, 30, 45]
+        self.key_df = key_df["series_date_key"].values
+        self.series_df = series_df[self.use_col]
+        for col in self.series_df.columns:
+            if self.series_df[col].dtype == np.float64:
+                self.series_df[col] = self.series_df[col].astype(np.float32)
+            elif self.series_df[col].dtype == np.int64:
+                self.series_df[col] = self.series_df[col].astype(np.int32)
+        self.mode = mode
+        self.data_length = 17280
+
+    def __len__(self) -> int:
+        return len(self.key_df)
+
+    def _padding_data_to_same_length(self, series_: np.ndarray) -> np.ndarray:
+        # series_.shape = [channel, data_length]
+        if series_.shape[-1] < self.data_length:
+            padding_length = self.data_length - series_.shape[-1]
+            # TODO:計測できていないときのデータが0の場合は変更する必要がある
+            pad_shape = [(0, 0), (0, padding_length)]
+            series_data = np.pad(series_, pad_shape, "edge")
+        elif series_.shape[-1] > self.data_length:
+            # print(f"[warning] data length is over.")
+            series_data = series_[:, : self.data_length]
+        else:
+            series_data = series_
+        return series_data
+
+    def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_["event"].values
+        target = target.reshape(1, -1)  # [channel=1, data_length]
+        target = self._padding_data_to_same_length(target)
+        target = torch.tensor(target, dtype=torch.long)
+        return target
+
+    def _get_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        input_data = series_df_[
+            [
+                "anglez",
+                "enmo",
+            ]
+        ].values.T
+        for roll_num in self.mean_std_rollnum_list:
+            anglez_mean = (
+                series_df_["anglez"]
+                .rolling(roll_num, center=True)
+                .mean()
+                .fillna(0)
+                .values
+            )
+            anglez_std = (
+                series_df_["anglez"]
+                .rolling(roll_num, center=True)
+                .std()
+                .fillna(0)
+                .values
+            )
+            enmo_mean = (
+                series_df_["enmo"]
+                .rolling(roll_num, center=True)
+                .mean()
+                .fillna(0)
+                .values
+            )
+            enmo_std = (
+                series_df_["enmo"].rolling(roll_num, center=True).std().fillna(0).values
+            )
+            input_data = np.concatenate(
+                [
+                    input_data,
+                    np.expand_dims(anglez_mean, axis=0),
+                    np.expand_dims(anglez_std, axis=0),
+                    np.expand_dims(enmo_mean, axis=0),
+                    np.expand_dims(enmo_std, axis=0),
+                ]
+            )
+        input_data = self._padding_data_to_same_length(input_data)
+        input_data = torch.tensor(input_data, dtype=torch.float16)
+        return input_data
+
+    def __getitem__(self, idx):
+        data_key = self.key_df[idx]
+        series_data = self.series_df[self.series_df["series_date_key"] == data_key]
+        # if len(series_data) > self.data_length:
+        #     print(f"[warning] data length is over. series_date_key: {data_key}")
+        input = self._get_input_data(series_data)
+        # series_date_keyと開始時刻のstepをdictにしておく
+        input_info_dict = {
+            "series_date_key": data_key,
+            "start_step": series_data["step"].values[0].astype(np.int32),
+            "end_step": series_data["step"].values[-1].astype(np.int32),
+        }
+        if self.mode == "train" or self.mode == "valid":
+            target = self._get_target_data(series_data)
+            return input, target, input_info_dict
+        else:
+            return input, input_info_dict
+
+
 class DSSAddRolldiffDataset(Dataset):
     def __init__(
         self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
@@ -398,6 +516,8 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSEventDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "add_rolldiff":
             dataset = DSSAddRolldiffDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "mean_stds":
+            dataset = DSSMeanStdsDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
     if mode == "train" or mode == "pseudo":
@@ -420,15 +540,19 @@ if __name__ == "__main__":
 
     num_workers = os.cpu_count()
     num_workers = 0
-    is_pseudo = True
 
     class CFG:
         pseudo_threshold = 0.3
         num_workers = num_workers
         batch_size = 2
+        mode = "train"
+        model_type = "mean_stds"
 
-    # series_df = pd.read_parquet("/kaggle/input/preprocessed_train_series_le.parquet")
-    series_df = pd.read_parquet("/kaggle/input/pseudo_train_series_fold0_le20.parquet")
+    series_df = pd.read_parquet(
+        "/kaggle/input/preprocessed_train_series_le_50_fold.parquet"
+    )
+    # series_df
+    # = pd.read_parquet("/kaggle/input/pseudo_train_series_fold0_le50.parquet")
     # series_date_keyとseries_data_key_strのuniqueだけでdataframeを作る
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     key_df["series_id"], key_df["date"] = (
@@ -441,12 +565,12 @@ if __name__ == "__main__":
 
     print("data loaded")
 
-    dataloader = get_loader(CFG, key_df, series_df, mode="pseudo")
+    dataloader = get_loader(CFG, key_df, series_df, mode=CFG.mode)
     print("dataloader length:", len(dataloader))
     import time
 
     start_time = time.time()
-    if not is_pseudo:
+    if CFG.mode != "pseudo":
         for idx, (input, target, input_info) in enumerate(dataloader):
             print(idx)
             load_time = time.time() - start_time

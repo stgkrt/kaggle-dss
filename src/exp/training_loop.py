@@ -19,7 +19,7 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 from dss_dataloader import get_loader
 from dss_metrics import score
 from dss_model import get_model
-from log_utils import AverageMeter, ProgressLogger, WandbLogger, init_logger
+from logger import AverageMeter, ProgressLogger, WandbLogger, init_logger
 from losses import get_class_criterion
 from postprocess import detect_event_from_classpred, make_submission_df
 from scheduler import get_optimizer, get_scheduler
@@ -254,7 +254,6 @@ def training_loop(CFG, LOGGER):
         LOGGER.info(f"fold[{fold}] valid data key num: {valid_key_num}")
         if train_key_num + valid_key_num != len(key_df):
             raise ValueError("train/valid data key num is not same")
-        LOGGER.info(f"fold[{fold}] train data key num: {len(train_key_df)}")
         train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
         valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
         LOGGER.info(f"fold[{fold}] get_loader finished")
