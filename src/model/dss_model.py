@@ -390,9 +390,85 @@ class DSSEventoutUTimeModel(nn.Module):
         return class_output, event_output
 
 
+class DSSEventDetUTimeModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        ave_padding = int((config.ave_kernel_size - 1) / 2)
+        self.class_avg_pool = nn.AvgPool1d(
+            kernel_size=config.ave_kernel_size,
+            stride=1,
+            padding=ave_padding,
+        )
+        maxpool_padding = int((config.maxpool_kernel_size - 1) / 2)
+        self.max_pool = nn.MaxPool1d(
+            config.maxpool_kernel_size, stride=1, padding=maxpool_padding
+        )
+
+        self.encoder = Encoder(
+            config.input_channels + 2, config.embedding_base_channels
+        )
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                config.output_channels,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        # return [20, 125, 1000, 10000]
+        return [36, 216, 1728, 17280]
+
+    def _get_diff(self, x):
+        shifted_x = torch.roll(x, 1, dims=-1)  # [batch, seq_len]
+        invshifted_x = torch.roll(x, -1, dims=-1)
+        diff_x = shifted_x - invshifted_x
+        return diff_x
+
+    def _get_diff_peak(self, x):
+        peak = self.max_pool(x)
+        peak_mask = (x == peak).float()
+        peak = x * peak_mask
+        return peak
+
+    def forward(self, x):
+        class_pred = x[:, -1, :]  # [batch, seq_len] 最後のchにclass_predを入れておくこと
+        avepooled = self.class_avg_pool(class_pred)
+        diff_avepooled = self._get_diff(avepooled)
+        peak_values = self._get_diff_peak(diff_avepooled)  # [batch, seq_len]
+        # shapeを合わせるためにunsqueeze
+        diff_avepooled = torch.unsqueeze(diff_avepooled, dim=1)  # [batch, 1, seq_len]
+        peak_values = torch.unsqueeze(peak_values, dim=1)  # [batch, 1, seq_len]
+        x = torch.cat([x, diff_avepooled, peak_values], dim=1)
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        output = self.head(x)
+        return output
+
+
 def get_model(config):
     if config.model_type == "event_output":
         model = DSSEventoutUTimeModel(config)
+    elif config.model_type == "event_detect":
+        model = DSSEventDetUTimeModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -402,29 +478,18 @@ if __name__ == "__main__":
     input_channels = 16
 
     class config:
-        input_channels = 1
+        model_type = "event_detect"
+        input_channels = 3
         embedding_base_channels = 16
         class_output_channels = 1
-        event_output_channels = 2
-
-    # neck_input = torch.randn(1, config.embedding_base_channel * 16, 20)
-    # print("input shape", neck_input.shape)
-    # neck = NeckBlock(config.embedding_base_channel * 16)
-    # y = neck(neck_input)
+        output_channels = 2
+        ave_kernel_size = 301
+        maxpool_kernel_size = 11
 
     x = torch.randn(
         1, config.input_channels, 17280
     )  # (batch_size, input_channels, seq_len)
-
-    print("encoder")
-    encoder = Encoder(config.input_channels, config.embedding_base_channels)
-    y, skip_connetctions = encoder(x)
-    print(y.shape)
-    for skip_connetction in skip_connetctions:
-        print(skip_connetction.shape)
-
-    print("dss model")
-    model = DSSUTimeModel(config)
-    class_out, event_out = model(x)
-    print("class_out", class_out.shape)
-    print("event_out", event_out.shape)
+    print("input shape: ", x.shape)
+    model = get_model(config)
+    output = model(x)
+    print("output shape", output.shape)

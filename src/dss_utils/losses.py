@@ -21,6 +21,7 @@ class PositiveOnlyLoss(nn.Module):
     def __init__(self, eps=1e-6):
         super(PositiveOnlyLoss, self).__init__()
         self.eps = eps
+        self.weight = 1000.0
 
     def forward(self, outputs, targets):
         positive_mask = (targets > 0.5).float()
@@ -28,6 +29,7 @@ class PositiveOnlyLoss(nn.Module):
         masked_targets = targets * positive_mask
         # bceっぽい感じのpositivie 部分だけ計算するlossにする
         loss = -masked_targets * torch.log(masked_outputs + self.eps)
+        loss = loss * self.weight
         return loss.mean()
 
 
@@ -118,17 +120,10 @@ class PseudoNegativeIgnoreBCELoss(nn.Module):
 
 
 def get_class_criterion(CFG):
-    # if hasattr(CFG, "positive_weight"):
-    #     positive_weight = torch.tensor([CFG.class_positive_weight])
-    # else:
-    #     positive_weight = torch.tensor([0.5])
-
-    # positive_weight = positive_weight.to(CFG.device)
-    # criterion = nn.BCEWithLogitsLoss(pos_weight=positive_weight)
-    # criterion = nn.BCELoss(weight=positive_weight)
-    # criterion = nn.CrossEntropyLoss(weight=positive_weight)
-    # criterion = nn.CrossEntropyLoss()
-    criterion = NegativeIgnoreBCELoss()
+    if CFG.model_type == "event_det":
+        criterion = PositiveOnlyLoss()
+    else:
+        criterion = NegativeIgnoreBCELoss()
     return criterion
 
 
