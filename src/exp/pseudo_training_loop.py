@@ -37,11 +37,19 @@ def seed_everything(seed=42):
 
 
 def get_pseudo_target_key_list(series_df: pd.DataFrame) -> list:
-    series_df["is_unknown"] = (series_df["event"] == -1).astype(int)
-    series_df["pseudo_count"] = series_df.groupby("series_date_key")[
-        "is_unknown"
-    ].transform("sum")
-    series_df["is_pseudo_target"] = (series_df["pseudo_count"] > 0).astype("int8")
+    if "is_pseudo_target" not in series_df.columns:
+        series_df["pseudo_count"] = series_df["event"].apply(lambda x: int(x == -1))
+        series_df["pseudo_count"] = series_df.groupby("series_date_key")[
+            "pseudo_count"
+        ].transform("sum")
+        # series_date_keyごとにpseudo_countが0以上のところを1にする
+        series_df["is_pseudo_target"] = series_df["event"].apply(lambda x: int(x > 0))
+        series_df["is_pseudo_target"] = series_df.groupby("series_date_key")[
+            "is_pseudo_target"
+        ].transform("sum")
+        series_df["is_pseudo_target"] = (series_df["is_pseudo_target"] > 0).astype(
+            "uint8"
+        )
     pseudo_target_key_list = series_df[series_df["is_pseudo_target"] > 0][
         "series_date_key"
     ].unique()
@@ -160,7 +168,6 @@ def get_pseudo_df(
     valid_input_info_dict: dict,
     valid_preds_dict: dict,
     oof_df_fold: pd.DataFrame,
-    pseudo_threshold: float = 0.15,
 ) -> pd.DataFrame:
     start_time = time.time()
     print("creating oof_df", end=" ... ")

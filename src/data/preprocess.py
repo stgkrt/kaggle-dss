@@ -182,49 +182,66 @@ def preprocess_train_series(
     return train_series_
 
 
+# なんかこれ間違ってそう
 def pseudo_count_by_seires_date_key(train_series_: pd.DataFrame) -> pd.DataFrame:
-    # series date keyごとにclass targetの-1の数を数える
+    # series date keyごとにeventの-1をカウントする
+    train_series_["pseudo_count"] = train_series_["event"].apply(lambda x: int(x == -1))
     train_series_["pseudo_count"] = train_series_.groupby("series_date_key")[
-        "event"
-    ].apply(lambda x: (x == -1).sum())
-    train_series_["pseudo_count"] = train_series_["pseudo_count"].fillna(0)
-    train_series_["is_pseudo_target"] = (train_series_["pseudo_count"] > 0).astype(
-        "int8"
+        "pseudo_count"
+    ].transform("sum")
+    # series_date_keyごとにpseudo_countが0以上のところを1にする
+    train_series_["is_pseudo_target"] = train_series_["event"].apply(
+        lambda x: int(x > 0)
+    )
+    train_series_["is_pseudo_target"] = train_series_.groupby("series_date_key")[
+        "is_pseudo_target"
+    ].transform("sum")
+    train_series_["is_pseudo_target"] = (train_series_["is_pseudo_target"] > 0).astype(
+        "uint8"
     )
     return train_series_
 
 
 if __name__ == "__main__":
     print("load data")
-    train_series_df = pd.read_parquet(
-        "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
-        # "/kaggle/input/preprocessed_train_series_le_50_fold.parquet"
-    )
-    train_event_df = pd.read_csv(
-        "input/child-mind-institute-detect-sleep-states/train_events.csv"
-    )
-    print("preprocessing data...")
-
-    # 全columnについてfloat32のcolumnは64に変換する
-    preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
-    preprocessed_df.to_parquet("/kaggle/input/check.parquet")
-    print("preprocessed_df", preprocessed_df.isna().sum())
-    print(preprocessed_df.head())
-    preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
-    print("preprocessed_df", preprocessed_df.isna().sum())
-    for col in train_series_df.columns:
-        if train_series_df[col].dtype == "float32":
-            train_series_df[col] = train_series_df[col].astype("float64")
-    preprocessed_df.to_parquet(
-        "/kaggle/input/preprocessed_train_series_meanstd_lepseudo.parquet"
-    )
-
     # train_series_df = pd.read_parquet(
-    #     "/kaggle/input/preprocessed_train_series_le_fold.parquet"
+    #     "/kaggle/input/child-mind-institute-detect-sleep-states/train_series.parquet"
+    #     # "/kaggle/input/preprocessed_train_series_le_50_fold.parquet"
     # )
-    # print(train_series_df.isna().sum())
-    # train_series_df["event"] = train_series_df["event"].fillna(-1)
-    # train_series_df = pseudo_count_by_seires_date_key(train_series_df)
-    # print(train_series_df.isna().sum())
-    # print(train_series_df.head())
-    # train_series_df.to_csv("/kaggle/input/preprocessed_train_series_le_fold_pseudo.csv")
+    # train_event_df = pd.read_csv(
+    #     "input/child-mind-institute-detect-sleep-states/train_events.csv"
+    # )
+    # print("preprocessing data...")
+
+    # # 全columnについてfloat32のcolumnは64に変換する
+    # preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
+    # preprocessed_df.to_parquet("/kaggle/input/check.parquet")
+    # print("preprocessed_df", preprocessed_df.isna().sum())
+    # print(preprocessed_df.head())
+    # preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
+    # print("preprocessed_df", preprocessed_df.isna().sum())
+    # for col in train_series_df.columns:
+    #     if train_series_df[col].dtype == "float32":
+    #         train_series_df[col] = train_series_df[col].astype("float64")
+    # preprocessed_df.to_parquet(
+    #     "/kaggle/input/preprocessed_train_series_meanstd_lepseudo.parquet"
+    # )
+
+    train_series_df = pd.read_parquet(
+        "/kaggle/input/preprocessed_train_series_le_fold.parquet"
+    )
+    print(train_series_df.isna().sum())
+    train_series_df = pseudo_count_by_seires_date_key(train_series_df)
+    train_series_df["event"] = train_series_df["event"].fillna(-1)
+    train_series_df["is_pseudo_target"] = train_series_df["is_pseudo_target"].fillna(1)
+    print(train_series_df.isna().sum())
+    print(train_series_df.head(10))
+
+    pseudo_target_key_list = train_series_df[train_series_df["is_pseudo_target"] > 0][
+        "series_date_key"
+    ].unique()
+    print(len(pseudo_target_key_list), len(train_series_df["series_date_key"].unique()))
+
+    train_series_df.to_parquet(
+        "/kaggle/input/preprocessed_train_series_le_fold_pseudo.parquet"
+    )
