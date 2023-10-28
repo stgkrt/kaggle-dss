@@ -3,6 +3,7 @@ import os
 import sys
 
 import torch
+from eventdet_training_loop import eventdet_training_loop
 from pseudo_training_loop import pseudo_training_loop
 from training_loop import seed_everything, training_loop
 
@@ -142,3 +143,5 @@ if __name__ == "__main__":
         training_loop(config, logger)
     elif config.train_mode == "pseudo":
         pseudo_training_loop(config, logger)
+    elif config.train_mode == "event_det":
+        eventdet_training_loop(config, logger, test=True)
