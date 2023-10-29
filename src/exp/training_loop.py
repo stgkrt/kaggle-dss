@@ -388,7 +388,10 @@ if __name__ == "__main__":
         # TEST_DIR = os.path.join(COMPETITION_DIR, "test")
         key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
         series_df = os.path.join(INPUT_DIR, "processed_train_withkey_nonull.parquet")
-        event_df = os.path.join(INPUT_DIR, "train_events.csv")
+        # event_df = os.path.join(INPUT_DIR, "train_events.csv")
+        event_df = os.path.join(
+            "/kaggle/input/preprocessed_train_event_notnull.parquet"
+        )
         # data
         # folds = [0, 1, 2, 3, 4]
         folds = [0]
