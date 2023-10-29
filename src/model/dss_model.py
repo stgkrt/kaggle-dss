@@ -404,9 +404,7 @@ class DSSEventDetUTimeModel(nn.Module):
             config.maxpool_kernel_size, stride=1, padding=maxpool_padding
         )
 
-        self.encoder = Encoder(
-            config.input_channels + 2, config.embedding_base_channels
-        )
+        self.encoder = Encoder(config.input_channels, config.embedding_base_channels)
         self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
         skip_connections_length = self._get_skip_connections_length()
         self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
@@ -449,14 +447,15 @@ class DSSEventDetUTimeModel(nn.Module):
         return peak
 
     def forward(self, x):
-        class_pred = x[:, -1, :]  # [batch, seq_len] 最後のchにclass_predを入れておくこと
-        avepooled = self.class_avg_pool(class_pred)
-        diff_avepooled = self._get_diff(avepooled)
-        peak_values = self._get_diff_peak(diff_avepooled)  # [batch, seq_len]
+        # class_pred = x[:, -1, :]  # [batch, seq_len] 最後のchにclass_predを入れておくこと
+        # avepooled = self.class_avg_pool(class_pred)
+        # diff_avepooled = self._get_diff(avepooled)
+        # peak_values = self._get_diff_peak(diff_avepooled)  # [batch, seq_len]
         # shapeを合わせるためにunsqueeze
-        diff_avepooled = torch.unsqueeze(diff_avepooled, dim=1)  # [batch, 1, seq_len]
-        peak_values = torch.unsqueeze(peak_values, dim=1)  # [batch, 1, seq_len]
-        x = torch.cat([x, diff_avepooled, peak_values], dim=1)
+        # diff_avepooled = torch.unsqueeze(diff_avepooled, dim=1)  # [batch, 1, seq_len]
+        # peak_values = torch.unsqueeze(peak_values, dim=1)  # [batch, 1, seq_len]
+        # x = torch.cat([x, diff_avepooled, peak_values], dim=1)
+        # x = torch.cat([x[:, :-1, :], diff_avepooled], dim=1)
         x, skip_connetctions = self.encoder(x)
         x = self.neck_conv(x)
         x = self.decoder(x, skip_connetctions)

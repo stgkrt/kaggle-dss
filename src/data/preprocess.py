@@ -1,16 +1,15 @@
+import gc
 import warnings
 
 # import numpy as np
 import pandas as pd
-
-# from pandarallel import pandarallel
 
 warnings.filterwarnings("ignore")
 
 
 # Local Time converter
 def to_date_time(x):
-    return pd.to_datetime(x, format="%Y-%m-%d %H:%M:%S")  # utc=True
+    return pd.to_datetime(x, format="%Y%m%dT_%H:%M:%S")  # utc=True
 
 
 def to_localize(t):
@@ -27,7 +26,7 @@ def cast_64to16(train_series_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def preprocess_input(train_series_: pd.DataFrame) -> pd.DataFrame:
-    # train_series_ = cast_64to16(train_series_)
+    train_series_ = cast_64to16(train_series_)
     # series_idでgroup_byして一つずらしたanglezとの差分を取る
     # print("get anglez diff")
     # train_series_["anglez_absdiff"] = np.abs(
@@ -56,46 +55,46 @@ def preprocess_input(train_series_: pd.DataFrame) -> pd.DataFrame:
     # train_series_["anglez_absdiff_ave"].fillna(0)
     # train_series_["enmo_absdiff_ave"] = train_series_["enmo_absdiff_ave"].fillna(0)
     # anglezとenmoのrolling meanとrolling stdを取る
-    # print("get anglez and enmo rolling mean and std")
-    # for roll_num in [15, 30, 45]:
-    #     train_series_[f"anglez_mean_{roll_num}"] = (
-    #         train_series_.groupby("series_id")["anglez"]
-    #         .rolling(roll_num, center=True)
-    #         .mean()
-    #         .reset_index(0, drop=True)
-    #     )
-    #     train_series_[f"enmo_mean_{roll_num}"] = (
-    #         train_series_.groupby("series_id")["enmo"]
-    #         .rolling(roll_num, center=True)
-    #         .mean()
-    #         .reset_index(0, drop=True)
-    #     )
-    #     train_series_[f"anglez_std_{roll_num}"] = (
-    #         train_series_.groupby("series_id")["anglez"]
-    #         .rolling(roll_num, center=True)
-    #         .std()
-    #         .reset_index(0, drop=True)
-    #     )
-    #     train_series_[f"enmo_std_{roll_num}"] = (
-    #         train_series_.groupby("series_id")["enmo"]
-    #         .rolling(roll_num, center=True)
-    #         .std()
-    #         .reset_index(0, drop=True)
-    #     )
-    #     train_series_[f"anglez_mean_{roll_num}"] = train_series_[
-    #         f"anglez_mean_{roll_num}"
-    #     ].fillna(0)
-    #     train_series_[f"enmo_mean_{roll_num}"] = train_series_[
-    #         f"enmo_mean_{roll_num}"
-    #     ].fillna(0)
-    #     train_series_[f"anglez_std_{roll_num}"] = train_series_[
-    #         f"anglez_std_{roll_num}"
-    #     ].fillna(0)
-    #     train_series_[f"enmo_std_{roll_num}"] = train_series_[
-    #         f"enmo_std_{roll_num}"
-    #     ].fillna(0)
+    print("get anglez and enmo rolling mean and std")
+    for roll_num in [15, 30, 45]:
+        train_series_[f"anglez_mean_{roll_num}"] = (
+            train_series_.groupby("series_id")["anglez"]
+            .rolling(roll_num, center=True)
+            .mean()
+            .reset_index(0, drop=True)
+        )
+        train_series_[f"enmo_mean_{roll_num}"] = (
+            train_series_.groupby("series_id")["enmo"]
+            .rolling(roll_num, center=True)
+            .mean()
+            .reset_index(0, drop=True)
+        )
+        train_series_[f"anglez_std_{roll_num}"] = (
+            train_series_.groupby("series_id")["anglez"]
+            .rolling(roll_num, center=True)
+            .std()
+            .reset_index(0, drop=True)
+        )
+        train_series_[f"enmo_std_{roll_num}"] = (
+            train_series_.groupby("series_id")["enmo"]
+            .rolling(roll_num, center=True)
+            .std()
+            .reset_index(0, drop=True)
+        )
+        train_series_[f"anglez_mean_{roll_num}"] = train_series_[
+            f"anglez_mean_{roll_num}"
+        ].fillna(0)
+        train_series_[f"enmo_mean_{roll_num}"] = train_series_[
+            f"enmo_mean_{roll_num}"
+        ].fillna(0)
+        train_series_[f"anglez_std_{roll_num}"] = train_series_[
+            f"anglez_std_{roll_num}"
+        ].fillna(0)
+        train_series_[f"enmo_std_{roll_num}"] = train_series_[
+            f"enmo_std_{roll_num}"
+        ].fillna(0)
 
-    # train_series_ = cast_64to16(train_series_)
+    train_series_ = cast_64to16(train_series_)
     return train_series_
 
 
@@ -126,7 +125,7 @@ def set_train_groupby_label(
         {"onset": 0, "wakeup": 1, "unknown_onset": -1, "unknown_wakeup": -1}
     )
     train_event_["event"] = train_event_["event"].fillna(-1)
-
+    train_series_["step"] = train_series_["step"].astype("float64")
     # series_idとstepでmergeする
     print("merge series_id and step")
     df = pd.merge(
@@ -151,7 +150,7 @@ def get_date_from_timestamp(timestamp):
 
 
 def set_seriesdatekey(train_series_: pd.DataFrame) -> pd.DataFrame:
-    # pandarallel.initialize(progress_bar=True)
+    train_series_["timestamp"] = str(train_series_["timestamp"])
     train_series_["date"] = train_series_["timestamp"].apply(get_date_from_timestamp)
     train_series_["series_date_key"] = (
         train_series_["series_id"].astype(str) + "_" + train_series_["date"].astype(str)
@@ -209,6 +208,8 @@ def preprocess_train_series(
 def preprocess_notnull_train_series(
     train_series_: pd.DataFrame, train_event_: pd.DataFrame
 ) -> pd.DataFrame:
+    print("set unknown_onset and unknown_wakeup for null step")
+    train_series_ = set_train_groupby_label(train_series_, train_event_)
     print("event dropna")
     train_event_ = train_event_[train_event_["step"].notnull()]
     print("set series date key")
@@ -218,8 +219,8 @@ def preprocess_notnull_train_series(
     train_series_, train_event_ = label_encode_series_event_date_key(
         train_series_, train_event_
     )
-    print("set unknown_onset and unknown_wakeup for null step")
-    train_series_ = set_train_groupby_label(train_series_, train_event_)
+    train_event_["event"] = train_event_["event"].replace({0: "onset", 1: "wakeup"})
+    train_event_ = train_event_.dropna()
     return train_series_, train_event_
 
 
@@ -252,25 +253,27 @@ if __name__ == "__main__":
     train_event_df = pd.read_csv(
         "input/child-mind-institute-detect-sleep-states/train_events.csv"
     )
-    print("preprocessing data...")
-
     # 全columnについてfloat32のcolumnは64に変換する
     # preprocessed_df = preprocess_train_series(train_series_df, train_event_df)
     preprocessed_df, processed_event_df = preprocess_notnull_train_series(
         train_series_df, train_event_df
     )
+    processed_event_df.to_parquet(
+        "/kaggle/input/preprocessed_train_event_notnull.parquet"
+    )
+    del processed_event_df
+    gc.collect()
     print("preprocessed_df", preprocessed_df.isna().sum())
     print(preprocessed_df.head())
     # preprocessed_df = pseudo_count_by_seires_date_key(preprocessed_df)
     # print("preprocessed_df", preprocessed_df.isna().sum())
+    preprocessed_df = preprocessed_df.drop(["timestamp"], axis=1)
     for col in train_series_df.columns:
         if train_series_df[col].dtype == "float32":
             train_series_df[col] = train_series_df[col].astype("float64")
+
     preprocessed_df.to_parquet(
         "/kaggle/input/preprocessed_train_series_notnull.parquet"
-    )
-    processed_event_df.to_parquet(
-        "/kaggle/input/preprocessed_train_event_notnull.parquet"
     )
 
     # train_series_df = pd.read_parquet(

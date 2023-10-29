@@ -34,7 +34,7 @@ class PositiveOnlyLoss(nn.Module):
 
 
 class PositiveAroundNegativeLoss(nn.Module):
-    def __init__(self, pos_weight=10.0, neg_weight=1.0, eps=1e-7):
+    def __init__(self, pos_weight=50.0, neg_weight=1.0, eps=1e-7):
         # weightはもう一方のlossを見て雰囲気で決めた
         super(PositiveAroundNegativeLoss, self).__init__()
         self.pos_weight = pos_weight

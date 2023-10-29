@@ -51,8 +51,6 @@ class DSSDataset(Dataset):
     def __getitem__(self, idx):
         data_key = self.key_df["series_date_key"].iloc[idx]
         series_data = self.series_df[self.series_df["series_date_key"] == data_key]
-        # if len(series_data) > self.data_length:
-        #     print(f"[warning] data length is over. series_date_key: {data_key}")
         input = self._get_input_data(series_data)
         # series_date_keyと開始時刻のstepをdictにしておく
         input_info_dict = {
@@ -544,7 +542,7 @@ class DSSEventDetDataset(Dataset):
         self.mode = mode
         self.data_length = 17280
 
-        maxpool_kernel_size = 11  # scoreが1.0の範囲
+        maxpool_kernel_size = 61  # scoreが1.0の範囲
         maxpool_stride = 1
         # 入力サイズと出力サイズが一致するようにpaddingを調整
         maxpool_padding = int((maxpool_kernel_size - maxpool_stride) / 2)
@@ -554,13 +552,14 @@ class DSSEventDetDataset(Dataset):
             padding=maxpool_padding,
         )
         # negativeが多くなりすぎてlogitsが小さくなってしまうのでかなり広めにとる
-        # ave_kernel_size = 361  # scoreが入る範囲
-        ave_kernel_size = 7201  # scoreが入る範囲
+        ave_kernel_size = 361  # scoreが入る範囲
+        # ave_kernel_size = 3601  # scoreが入る範囲
         ave_stride = 1
         ave_padding = int((ave_kernel_size - ave_stride) / 2)
         self.average_pool = nn.AvgPool1d(
             kernel_size=ave_kernel_size, stride=ave_stride, padding=ave_padding
         )
+        print("dateset_initialized")
 
     def __len__(self) -> int:
         return len(self.key_df)
@@ -607,7 +606,9 @@ class DSSEventDetDataset(Dataset):
         target = target.unsqueeze(0)  # [channel=1, data_length]
         target = self.max_pool(target)
         positive_target = (target == 1).float()
-        target = self.average_pool(target)
+        for _ in range(100):
+            target = self.average_pool(target)
+        # target = self.average_pool(target)
         target = torch.clip(positive_target + target, 0, 1)
         return target
 
