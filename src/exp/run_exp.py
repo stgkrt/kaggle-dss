@@ -73,7 +73,8 @@ def parse_args():
         default=os.path.join(
             root_dir,
             "input",
-            "preprocessed_train_series_le_fold.parquet",
+            # "preprocessed_train_series_le_fold.parquet",
+            "preprocessed_train_series_notnull_fold.parquet",
             # "preprocessed_train_series_6ch_lepseudo_fold.parquet",
             # "preprocessed_train_series_le_50_fold.parquet",
         ),
@@ -94,20 +95,22 @@ def parse_args():
     parser.add_argument("--folds", type=int, nargs="*", default=[0])
     parser.add_argument("--seed", type=int, default=42)
     # parser.add_argument("--num_workers", type=int, default=os.cpu_count())
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--num_workers", type=int, default=6)
 
     # model
-    parser.add_argument("--model_type", type=str, default="add_rolldiff")
+    parser.add_argument("--model_type", type=str, default="normal")
     parser.add_argument("--input_channels", type=int, default=4)
     parser.add_argument("--class_output_channels", type=int, default=1)
     parser.add_argument("--event_output_channels", type=int, default=2)
+    parser.add_argument("--output_channels", type=int, default=2)
     parser.add_argument("--embedding_base_channels", type=int, default=16)
-    parser.add_argument("--ave-kernel-size", type=int, default=11)
+    parser.add_argument("--ave-kernel-size", type=int, default=301)
+    parser.add_argument("--maxpool-kernel-size", type=int, default=11)
     parser.add_argument("--pseudo_weight_exp", type=str, default="exp003")
 
     # training setting
     parser.add_argument("--n_epoch", type=int, default=2)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-6)
     parser.add_argument("--T_0", type=int, default=10)
@@ -140,8 +143,11 @@ if __name__ == "__main__":
 
     seed_everything(config.seed)
     if config.train_mode == "train":
-        training_loop(config, logger)
+        if config.model_type == "event_detect":
+            eventdet_training_loop(config, logger)
+        else:
+            training_loop(config, logger)
     elif config.train_mode == "pseudo":
         pseudo_training_loop(config, logger)
-    elif config.train_mode == "event_det":
-        eventdet_training_loop(config, logger, test=True)
+    else:
+        raise Exception("invalid train mode.")
