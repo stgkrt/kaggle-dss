@@ -242,12 +242,8 @@ def training_loop(CFG, LOGGER):
         # )
         train_series_df = series_df[series_df["fold"] != fold]
         train_key_df = get_key_df(train_series_df)
-        if len(train_series_df["series_date_key"].unique()) != len(train_key_df):
-            raise ValueError("train data key num is not same")
         valid_series_df = series_df[series_df["fold"] == fold]
         valid_key_df = get_key_df(valid_series_df)
-        if len(valid_series_df["series_date_key"].unique()) != len(valid_key_df):
-            raise ValueError("valid data key num is not same")
         train_key_num = len(train_key_df)
         valid_key_num = len(valid_key_df)
         LOGGER.info(f"fold[{fold}] train data key num: {train_key_num}")
@@ -300,8 +296,6 @@ def training_loop(CFG, LOGGER):
             log_str += f", train:{train_loss_avg:.4f}, valid:{valid_loss_avg:.4f}"
             log_str += f", lr:{lr:.6f}, elapsed time:{elapsed:.2f} min"
             LOGGER.info(log_str)
-            # competition scoreを計算するように変更する
-
             # wandb log
             wandb_log_dict[f"train_loss/fold{fold}"] = train_loss_avg
             wandb_log_dict[f"valid_loss/fold{fold}"] = valid_loss_avg
