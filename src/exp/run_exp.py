@@ -74,14 +74,15 @@ def parse_args():
             root_dir,
             "input",
             # "preprocessed_train_series_le_fold.parquet",
-            "preprocessed_train_series_notnull_fold.parquet",
-            # "preprocessed_train_series_6ch_lepseudo_fold.parquet",
+            # "preprocessed_train_series_notnull_fold.parquet",
+            "preprocessed_train_series_6ch_lepseudo_fold.parquet",
             # "preprocessed_train_series_le_50_fold.parquet",
         ),
     )
     parser.add_argument(
         "--event_df",
         type=str,
+        # default="/kaggle/input/preprocessed_train_event_notnull.parquet",
         default=os.path.join(
             root_dir,
             "input",
