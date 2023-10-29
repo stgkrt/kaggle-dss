@@ -475,7 +475,6 @@ def get_model(config):
 
 
 if __name__ == "__main__":
-    input_channels = 16
 
     class config:
         model_type = "event_detect"
@@ -485,9 +484,10 @@ if __name__ == "__main__":
         output_channels = 2
         ave_kernel_size = 301
         maxpool_kernel_size = 11
+        batch_size = 32
 
     x = torch.randn(
-        1, config.input_channels, 17280
+        config.batch_size, config.input_channels, 17280
     )  # (batch_size, input_channels, seq_len)
     print("input shape: ", x.shape)
     model = get_model(config)

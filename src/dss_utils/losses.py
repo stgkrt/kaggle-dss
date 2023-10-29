@@ -41,17 +41,21 @@ class PositiveAroundNegativeLoss(nn.Module):
         self.neg_weight = neg_weight
         self.eps = eps
 
+    def _clip_value(self, value):
+        return torch.clip(value, min=self.eps, max=1.0 - self.eps)
+
     def forward(self, outputs, targets):
         # dataloaderのpoolのサイズでこの閾値は変化するので注意
-        positive_mask = (targets > 0.5).float()
+        positive_mask = (targets == 1.0).float()
         # average poolで作った1の周りのposとnegの閾値の間のところはlossを計算しない
-        negative_mask = (targets < self.eps).float()
+        negative_mask = (targets < self.eps).float() + (targets >= 0.0).float()
+        negative_mask = (negative_mask > 0.0).float()
 
-        pos_masked_outputs = outputs * positive_mask
-        neg_masked_outputs = outputs * negative_mask
+        pos_masked_outputs = self._clip_value(outputs * positive_mask + self.eps)
+        neg_masked_outputs = self._clip_value(1 - outputs * negative_mask + self.eps)
 
-        pos_loss = -positive_mask * torch.log(pos_masked_outputs + self.eps)
-        neg_loss = -negative_mask * torch.log(1 - neg_masked_outputs + self.eps)
+        pos_loss = -positive_mask * torch.log(pos_masked_outputs)
+        neg_loss = -negative_mask * torch.log(neg_masked_outputs)
 
         loss = pos_loss * self.pos_weight + neg_loss * self.neg_weight
         return loss.mean()
@@ -120,8 +124,9 @@ class PseudoNegativeIgnoreBCELoss(nn.Module):
 
 
 def get_class_criterion(CFG):
-    if CFG.model_type == "event_det":
-        criterion = PositiveOnlyLoss()
+    if CFG.model_type == "event_detect":
+        # criterion = PositiveOnlyLoss()
+        criterion = PositiveAroundNegativeLoss()
     else:
         criterion = NegativeIgnoreBCELoss()
     return criterion

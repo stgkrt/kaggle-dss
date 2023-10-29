@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 import pandas as pd  # type: ignore
 import torch
+import torch.nn as nn
 
 warnings.filterwarnings("ignore")
 
@@ -21,7 +22,6 @@ from dss_metrics import score
 from dss_model import get_model
 from logger import AverageMeter, ProgressLogger, WandbLogger, init_logger
 from losses import get_class_criterion
-from postprocess import detect_event_from_classpred, make_submission_df
 from scheduler import get_optimizer, get_scheduler
 
 
@@ -65,17 +65,21 @@ def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER
 
 
 def get_valid_values_dict(
-    class_values: torch.Tensor,
+    event_values: torch.Tensor,
     validation_dict: dict,
     mode: str = "preds",
 ) -> dict:
-    class_values = class_values.detach().cpu().numpy()
-    class_values = class_values.astype(np.float16)  # type: ignore
-    if len(validation_dict[f"class_{mode}"]) == 0:
-        validation_dict[f"class_{mode}"] = class_values
+    event_values = event_values.detach().cpu().numpy()
+    # event_values = event_values.astype(np.float16)  # type: ignore
+    if len(validation_dict[f"onset_{mode}"]) == 0:
+        validation_dict[f"onset_{mode}"] = event_values[:, 0, :]
+        validation_dict[f"wakeup_{mode}"] = event_values[:, 1, :]
     else:
-        validation_dict[f"class_{mode}"] = np.concatenate(
-            [validation_dict[f"class_{mode}"], class_values], axis=0
+        validation_dict[f"onset_{mode}"] = np.concatenate(
+            [validation_dict[f"onset_{mode}"], event_values[:, 0, :]], axis=0
+        )
+        validation_dict[f"wakeup_{mode}"] = np.concatenate(
+            [validation_dict[f"wakeup_{mode}"], event_values[:, 1, :]], axis=0
         )
     return validation_dict
 
@@ -109,8 +113,8 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
         logger=LOGGER,
         mode="valid",
     )
-    valid_predictions = {"class_preds": np.empty(0)}
-    valid_targets = {"class_targets": np.empty(0)}
+    valid_predictions = {"onset_preds": np.empty(0), "wakeup_preds": np.empty(0)}
+    valid_targets = {"onset_targets": np.empty(0), "wakeup_targets": np.empty(0)}
     valid_input_info = {"series_date_key": [], "start_step": [], "end_step": []}
 
     for batch_idx, (inputs, targets, input_info_dict) in enumerate(valid_loader):
@@ -140,7 +144,7 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
     )
 
 
-def get_oof_df(
+def get_event_oof_df(
     valid_input_info_dict: dict,
     valid_preds_dict: dict,
     valid_targets_dict: dict,
@@ -156,43 +160,85 @@ def get_oof_df(
         )
     ):
         # preds targets shape: [batch, ch, data_length]
-        class_pred = valid_preds_dict["class_preds"][idx]
-        class_target = valid_targets_dict["class_targets"][idx]
+        onset_pred = valid_preds_dict["onset_preds"][idx]
+        wakeup_pred = valid_preds_dict["wakeup_preds"][idx]
+        onset_target = valid_targets_dict["onset_targets"][idx]
+        wakeup_target = valid_targets_dict["wakeup_targets"][idx]
         data_condition = (
             (oof_df_fold["series_date_key"] == series_date_key)
             & (start_step <= oof_df_fold["step"])
             & (oof_df_fold["step"] <= end_step + 1)
         )
         series_date_data_num = len((oof_df_fold[data_condition]))
-        # steps = range(start_step, end_step + 1, 1)
         steps = range(start_step, start_step + series_date_data_num, 1)
-        if series_date_data_num < len(class_pred[0]):
-            class_pred = class_pred[0, :series_date_data_num]
-            class_target = class_target[0, :series_date_data_num]
-        elif series_date_data_num > len(class_pred[0]):
-            padding_num = series_date_data_num - len(class_pred[0])
-            class_pred = np.concatenate(
-                [class_pred[0], -1 * np.ones(padding_num)], axis=0
+        if series_date_data_num < onset_pred.shape[0]:
+            onset_pred = onset_pred[:series_date_data_num]
+            wakeup_pred = wakeup_pred[:series_date_data_num]
+            onset_target = onset_target[:series_date_data_num]
+            wakeup_target = wakeup_target[:series_date_data_num]
+        elif series_date_data_num > onset_pred.shape[0]:
+            padding_num = series_date_data_num - onset_pred.shape[0]
+            onset_pred = np.concatenate([onset_pred, -1 * np.ones(padding_num)], axis=0)
+            wakeup_pred = np.concatenate(
+                [wakeup_pred, -1 * np.ones(padding_num)], axis=0
             )
-            class_target = np.concatenate(
-                [class_target[0], -1 * np.ones(padding_num)], axis=0
+            onset_target = np.concatenate(
+                [onset_target, -1 * np.ones(padding_num)], axis=0
+            )
+            wakeup_target = np.concatenate(
+                [wakeup_target, -1 * np.ones(padding_num)], axis=0
             )
         else:
-            class_pred = class_pred[0]
-            class_target = class_target[0]
-        if not (len(class_pred) == len(class_target)) or not (
-            len(class_pred) == len(steps)
+            pass
+            # onset_pred = onset_pred[0]
+            # wakeup_pred = wakeup_pred[0]
+            # onset_target = onset_target[0]
+            # wakeup_target = wakeup_target[0]
+        if not (onset_pred.shape[0] == onset_target.shape[0]) or not (
+            onset_pred.shape[0] == len(steps)
         ):
-            print("len(class_pred)", len(class_pred))
-            print("len(class_target)", len(class_target))
+            print("len(event_pred)", onset_pred.shape[0])
+            print("len(event_target)", onset_target.shape[0])
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
-        oof_df_fold.loc[data_condition, "class_pred"] = class_pred
-        oof_df_fold.loc[data_condition, "class_target"] = class_target
-
+        oof_df_fold.loc[data_condition, "onset_pred"] = onset_pred
+        oof_df_fold.loc[data_condition, "wakeup_pred"] = wakeup_pred
+        oof_df_fold.loc[data_condition, "onset_target"] = onset_target
+        oof_df_fold.loc[data_condition, "wakeup_target"] = wakeup_target
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
     return oof_df_fold
+
+
+def make_submission_from_eventdf(df, threshold=0.1):
+    df = df[["series_id", "step", "onset_pred", "wakeup_pred"]].copy()
+    df["step"] = df["step"].astype(np.float64)
+    max_pool = nn.MaxPool1d(11, stride=1, padding=5)
+    onset_pred = (
+        max_pool(torch.tensor(df["onset_pred"].values).unsqueeze(0)).squeeze(0).numpy()
+    )
+    wakeup_pred = (
+        max_pool(torch.tensor(df["wakeup_pred"].values).unsqueeze(0)).squeeze(0).numpy()
+    )
+    peak_mask = onset_pred == df["onset_pred"].values
+    df["onset_pred"] = peak_mask * df["onset_pred"].values
+    peak_mask = wakeup_pred == df["wakeup_pred"].values
+    df["wakeup_pred"] = peak_mask * df["wakeup_pred"].values
+    # onset_predが大きい場合-onset_predの値を入力し、wakeup_predが大きい場合wakeup_predの値を入力する
+    df["event_pred"] = np.where(
+        df["onset_pred"].values > df["wakeup_pred"].values,
+        -df["onset_pred"].values,
+        df["wakeup_pred"].values,
+    )
+    # event_predがthreshold以上の場合、wakeup_predが大きい場合はwakeup、onset_predが大きい場合はonsetとする
+    df["event_score"] = df["event_pred"].apply(
+        lambda x: 1 if x > threshold else -1 if x < -threshold else 0
+    )
+    df = df[df["event_score"] != 0].copy()
+    df["event"] = df["event_score"].replace({1: "wakeup", -1: "onset"})
+    df["score"] = df["event_pred"].apply(lambda x: np.clip(np.abs(x), 0.0, 1.0))
+    df = df.drop(["event_pred", "onset_pred", "wakeup_pred", "event_score"], axis=1)
+    return df
 
 
 def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
@@ -218,7 +264,7 @@ def eventdet_training_loop(CFG, LOGGER):
     # oof_df = pd.DataFrame()
     oof_score_list = []
     for fold in CFG.folds:
-        LOGGER.info(f"-- fold{fold} training start --")
+        LOGGER.info(f"-- fold{fold} event detection training start --")
         wandb_logger = WandbLogger(CFG)
         wandb_log_dict = {}
         # set model & learning fn
@@ -230,16 +276,7 @@ def eventdet_training_loop(CFG, LOGGER):
 
         # training
         start_time = time.time()
-
         LOGGER.info(f"fold[{fold}] loading train/valid data")
-        # separate train/valid data
-        # train_key_df, valid_key_df = get_train_valid_key_df(key_df, fold, CFG)
-        # train_series_df = get_train_valid_series_df(
-        #     series_df, key_df, fold, mode="train"
-        # )
-        # valid_series_df = get_train_valid_series_df(
-        #     series_df, key_df, fold, mode="valid"
-        # )
         train_series_df = series_df[series_df["fold"] != fold]
         train_key_df = get_key_df(train_series_df)
         if len(train_series_df["series_date_key"].unique()) != len(train_key_df):
@@ -260,8 +297,8 @@ def eventdet_training_loop(CFG, LOGGER):
 
         oof_df_fold = valid_series_df.copy()
         init_cols = [
-            "class_pred",
-            "class_target",
+            "event_pred",
+            "event_target",
         ]
         oof_df_fold = oof_df_fold.assign(
             **{col: -1 * np.ones(len(oof_df_fold)) for col in init_cols}
@@ -326,14 +363,13 @@ def eventdet_training_loop(CFG, LOGGER):
         gc.collect()
         torch.cuda.empty_cache()
         LOGGER.info(f"fold{fold} model saved.")
-        oof_df_fold = get_oof_df(
+        oof_df_fold = get_event_oof_df(
             input_info_dict_list,
             valid_predictions,
             valid_targets,
             oof_df_fold,
         )
         LOGGER.info(f"fold{fold} oof_df created.")
-        oof_df_fold = detect_event_from_classpred(oof_df_fold)
 
         oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
         os.makedirs(oof_dir, exist_ok=True)
@@ -341,34 +377,25 @@ def eventdet_training_loop(CFG, LOGGER):
         print("save oof_df to ", oof_df_fold_path)
         oof_df_fold.to_parquet(oof_df_fold_path)
         LOGGER.info(f"fold{fold} event detected.")
-        oof_scoring_df = make_submission_df(oof_df_fold)
+        oof_fold_sub_df = make_submission_from_eventdf(oof_df_fold, threshold=0.1)
         LOGGER.info(f"fold{fold} submission df created.")
-        del oof_df_fold
-        gc.collect()
-
         event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
         event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
-        oof_score = score(event_df_fold, oof_scoring_df)
+        detected_event_rate = len(oof_fold_sub_df) / len(oof_df_fold) * 100
+        LOGGER.info(f"detect event={len(oof_fold_sub_df)}({detected_event_rate:.4f}%)")
+        LOGGER.info("scoring ...")
+        scoring_time = time.time()
+        oof_score = score(event_df_fold, oof_fold_sub_df)
+        elapsed = int(time.time() - scoring_time) / 60
+        LOGGER.info(f"scoring finished. elapsed time: {elapsed:.2f} min")
         oof_score_list.append(oof_score)
         LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
-        # oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
-
         wandb_logger.log_oofscore(fold, oof_score)
-    # oof_df = detect_event_from_classpred(oof_df)
-    # oof_scoring_df = make_submission_df(oof_df)
-    # event_df = event_df[event_df["series_id"].isin(oof_scoring_df["series_id"])]
-    # event_df = event_df[event_df["step"].notnull()]
-    # oof_score = score(event_df, oof_scoring_df)
-    # LOGGER.info(f"overall oof score: {oof_score:.4f}")
-    # wandb_logger.log_overall_oofscore(oof_score)
+        del oof_df_fold, oof_fold_sub_df, event_df_fold
+        gc.collect()
     over_all_score_mean = np.mean(oof_score_list)
     LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
     wandb_logger.log_overall_oofscore(over_all_score_mean)
-    # oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
-    # print("save oof_df to ", oof_df_path)
-    # oof_df.to_parquet(oof_df_path)
-    # print("oof_df saved. finish exp.")
-    # return oof_df
 
 
 if __name__ == "__main__":
@@ -376,25 +403,25 @@ if __name__ == "__main__":
 
     class CFG:
         # exp
-        EXP_NAME = "no_scoring_check"
+        exp_name = "event_det_debug"
 
         # directory
-        INPUT_DIR = os.path.abspath(
+        input_dir = os.path.abspath(
             os.path.join(
                 ROOT_DIR,
                 "input",
             )
         )
-        COMPETITION_DIR = os.path.join(
-            INPUT_DIR,
+        competition_dir = os.path.join(
+            input_dir,
             "child-mind-institute-detect-sleep-states",
         )
-        OUTPUT_DIR = os.path.abspath(os.path.join(ROOT_DIR, "working"))
-        # TRAIN_DIR = os.path.join(COMPETITION_DIR, "train")
-        # TEST_DIR = os.path.join(COMPETITION_DIR, "test")
-        key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
-        series_df = os.path.join(INPUT_DIR, "processed_train_withkey_nonull.parquet")
-        event_df = os.path.join(INPUT_DIR, "train_events.csv")
+        output_dir = os.path.abspath(os.path.join(ROOT_DIR, "working"))
+        exp_dir = os.path.join(output_dir, exp_name)
+        series_df = os.path.join("/kaggle/working/_oof/exp006_addlayer/oof_df.parquet")
+        event_df = (
+            "/kaggle/input/child-mind-institute-detect-sleep-states/train_events.csv"
+        )
         # data
         # folds = [0, 1, 2, 3, 4]
         folds = [0]
@@ -404,17 +431,19 @@ if __name__ == "__main__":
         group_key = "series_id"
 
         # model
-        model_type = "single_output"
-        input_channels = 2
-        class_output_channels = 1
-        event_output_channels = 2
+        model_type = "event_detect"
+        input_channels = 3
+        output_channels = 2
         embedding_base_channels = 16
+        ave_kernel_size = 301
+        maxpool_kernel_size = 11
 
         class_loss_weight = 1.0
         event_loss_weight = 100.0
 
         # training
-        n_epoch = 5
+        # n_epoch = 5
+        n_epoch = 1
         # batch_size = 32
         batch_size = 128
         # optimizer
@@ -429,9 +458,11 @@ if __name__ == "__main__":
         # log setting
         print_freq = 100
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        wandb_available = False
 
-    os.makedirs(CFG.OUTPUT_DIR, exist_ok=True)
+    os.makedirs(CFG.output_dir, exist_ok=True)
+    os.makedirs(CFG.exp_dir, exist_ok=True)
 
-    LOGGER = init_logger(log_file=os.path.join(CFG.OUTPUT_DIR, "check.log"))
+    LOGGER = init_logger(log_file=os.path.join(CFG.output_dir, "check.log"))
     LOGGER.info(f"using device: {CFG.device}")
     eventdet_training_loop(CFG, LOGGER)

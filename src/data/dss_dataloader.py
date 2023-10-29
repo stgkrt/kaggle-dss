@@ -14,22 +14,6 @@ class DSSDataset(Dataset):
         self.mode = mode
         self.data_length = 17280
 
-        maxpool_kernel_size = 361  # 奇数じゃないと同じ長さで出力できない
-        maxpool_stride = 1
-        # 入力サイズと出力サイズが一致するようにpaddingを調整
-        maxpool_padding = int((maxpool_kernel_size - maxpool_stride) / 2)
-        self.max_pool = nn.MaxPool1d(
-            kernel_size=maxpool_kernel_size,
-            stride=maxpool_stride,
-            padding=maxpool_padding,
-        )
-        ave_kernel_size = 101
-        ave_stride = 1
-        ave_padding = int((ave_kernel_size - ave_stride) / 2)
-        self.average_pool = nn.AvgPool1d(
-            kernel_size=ave_kernel_size, stride=ave_stride, padding=ave_padding
-        )
-
     def __len__(self) -> int:
         return len(self.key_df)
 
@@ -62,13 +46,6 @@ class DSSDataset(Dataset):
         target = self._padding_data_to_same_length(target)
         target = np.expand_dims(target, axis=0)  # [channel=1, data_length]
         target = torch.tensor(target, dtype=torch.long)
-        return target
-
-    def _soft_label(self, target: torch.Tensor) -> torch.Tensor:
-        target = target.float()
-        target = target.unsqueeze(0)  # [channel=1, data_length]
-        target = self.max_pool(target)
-        target = self.average_pool(target)
         return target
 
     def __getitem__(self, idx):
@@ -567,7 +544,7 @@ class DSSEventDetDataset(Dataset):
         self.mode = mode
         self.data_length = 17280
 
-        maxpool_kernel_size = 361  # 奇数じゃないと同じ長さで出力できない
+        maxpool_kernel_size = 11  # scoreが1.0の範囲
         maxpool_stride = 1
         # 入力サイズと出力サイズが一致するようにpaddingを調整
         maxpool_padding = int((maxpool_kernel_size - maxpool_stride) / 2)
@@ -576,7 +553,9 @@ class DSSEventDetDataset(Dataset):
             stride=maxpool_stride,
             padding=maxpool_padding,
         )
-        ave_kernel_size = 101
+        # negativeが多くなりすぎてlogitsが小さくなってしまうのでかなり広めにとる
+        # ave_kernel_size = 361  # scoreが入る範囲
+        ave_kernel_size = 7201  # scoreが入る範囲
         ave_stride = 1
         ave_padding = int((ave_kernel_size - ave_stride) / 2)
         self.average_pool = nn.AvgPool1d(
@@ -627,7 +606,9 @@ class DSSEventDetDataset(Dataset):
         target = target.float()
         target = target.unsqueeze(0)  # [channel=1, data_length]
         target = self.max_pool(target)
+        positive_target = (target == 1).float()
         target = self.average_pool(target)
+        target = torch.clip(positive_target + target, 0, 1)
         return target
 
     def _get_event_target_data(self, series_df_: pd.DataFrame) -> torch.Tensor:
@@ -674,7 +655,7 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSAddRolldiffDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "mean_stds":
             dataset = DSSMeanStdsDataset(key_df, series_df, mode)  # type: ignore
-        elif CFG.model_type == "event_det":
+        elif CFG.model_type == "event_detect":
             dataset = DSSEventDetDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
