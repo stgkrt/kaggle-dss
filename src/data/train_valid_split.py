@@ -35,20 +35,11 @@ if __name__ == "__main__":
 
     import pandas as pd
 
-    # series_df = pd.read_parquet(
-    #     "/kaggle/input/preprocessed_train_series_le_200.parquet"
-    # )
-    filename = "/kaggle/input/preprocessed_train_series_6ch_lepseudo.parquet"
-    output_filename = (
-        "/kaggle/input/preprocessed_train_series_6ch_lepseudo_fold.parquet"
-    )
+    filename = "/kaggle/input/preprocessed_train_series_notnull.parquet"
+    output_filename = "/kaggle/input/preprocessed_train_series_notnull_fold.parquet"
     series_df = pd.read_parquet(filename)
     print("series_df loaded.")
     series_df["event"] = series_df["event"].fillna(-1)
-    # train_seires_unique = series_df["series_id"].unique()
-    # train_seires_unique = train_seires_unique[:50]
-    # # series_df = series_df[series_df["series_id"].isin(train_seires_unique)]
-    # print("series_df", series_df.head())
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     print("key_df from series_df", key_df.head())
     key_df = key_df.reset_index(drop=True)
