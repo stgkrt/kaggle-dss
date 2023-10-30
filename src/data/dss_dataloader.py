@@ -164,12 +164,24 @@ class DSSMeanStdsDataset(Dataset):
         input_data = torch.tensor(input_data, dtype=torch.float16)
         return input_data
 
+    def _normalize_input_data(self, input_data: pd.DataFrame) -> np.ndarray:
+        # 各ch方向で別々に正規化
+        for ch in range(input_data.shape[0]):
+            if input_data[ch].max() == input_data[ch].min():
+                continue
+            input_data[ch] = (input_data[ch] - input_data[ch].min()) / (
+                input_data[ch].max() - input_data[ch].min()
+            )
+        input_data = torch.tensor(input_data, dtype=torch.float16)
+        return input_data
+
     def __getitem__(self, idx):
         data_key = self.key_df[idx]
         series_data = self.series_df[self.series_df["series_date_key"] == data_key]
         # if len(series_data) > self.data_length:
         #     print(f"[warning] data length is over. series_date_key: {data_key}")
         input = self._get_input_data(series_data)
+        input = self._normalize_input_data(input)
         # series_date_keyと開始時刻のstepをdictにしておく
         input_info_dict = {
             "series_date_key": data_key,
