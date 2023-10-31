@@ -463,11 +463,134 @@ class DSSEventDetUTimeModel(nn.Module):
         return output
 
 
+class EncoderDownsample(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 1,
+        embedding_base_channel: int = 16,
+    ) -> None:
+        super().__init__()
+        self.encoder_blocks = nn.Sequential(
+            EncoderBlock(
+                input_channels,
+                embedding_base_channel,
+                pool_kernel_size=10,
+                pool_stride=10,
+            ),
+            EncoderBlock(
+                embedding_base_channel,
+                embedding_base_channel * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderBlock(
+                embedding_base_channel * 2,
+                embedding_base_channel * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+        )
+
+    def forward(self, x):
+        skip_connections = []
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
+class DecoderDownsample(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 16,
+        skip_connections_length: list = [18, 144, 1440],
+    ) -> None:
+        super().__init__()
+        self.decoder_blocks = nn.Sequential(
+            DecoderBlock(
+                input_channels * 8,
+                input_channels * 4,
+                conv_kernel_size=5,
+                upsample_kernel_size=5,
+                upsample_size=skip_connections_length[0],
+            ),
+            DecoderBlock(
+                input_channels * 4,
+                input_channels * 2,
+                conv_kernel_size=5,
+                upsample_kernel_size=8,
+                upsample_size=skip_connections_length[1],
+            ),
+            DecoderBlock(
+                input_channels * 2,
+                input_channels,
+                conv_kernel_size=5,
+                upsample_kernel_size=10,
+                upsample_size=skip_connections_length[2],
+            ),
+        )
+
+    def forward(self, x, skip_connections):
+        for idx, decoder_block in enumerate(self.decoder_blocks):
+            x = decoder_block(x, skip_connections[-idx - 1])
+        return x
+
+
+class DSSUTimeDownsampleModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = EncoderDownsample(
+            config.input_channels, config.embedding_base_channels
+        )
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 4)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = DecoderDownsample(
+            config.embedding_base_channels, skip_connections_length
+        )
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                config.class_output_channels,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [18, 144, 1440]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
 def get_model(config):
     if config.model_type == "event_output":
         model = DSSEventoutUTimeModel(config)
     elif config.model_type == "event_detect":
         model = DSSEventDetUTimeModel(config)
+    elif config.model_type == "down_sample":
+        model = DSSUTimeDownsampleModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -476,7 +599,7 @@ def get_model(config):
 if __name__ == "__main__":
 
     class config:
-        model_type = "event_detect"
+        model_type = "down_sample"
         input_channels = 3
         embedding_base_channels = 16
         class_output_channels = 1
@@ -485,10 +608,15 @@ if __name__ == "__main__":
         maxpool_kernel_size = 11
         batch_size = 32
 
+    # x = torch.randn(
+    #     config.batch_size, config.input_channels, 17280
+    # )  # (batch_size, input_channels, seq_len)
+
     x = torch.randn(
-        config.batch_size, config.input_channels, 17280
+        config.batch_size, config.input_channels, 1440
     )  # (batch_size, input_channels, seq_len)
     print("input shape: ", x.shape)
+    # model = get_model(config)
     model = get_model(config)
     output = model(x)
     print("output shape", output.shape)

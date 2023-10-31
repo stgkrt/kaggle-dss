@@ -65,6 +65,66 @@ class DSSDataset(Dataset):
             return input, target, input_info_dict
 
 
+class DSSDownSampleDataset(Dataset):
+    def __init__(
+        self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
+    ) -> None:
+        self.key_df = key_df
+        self.series_df = series_df
+        self.mode = mode
+        self.data_length = 1440  # 17280/12
+
+    def __len__(self) -> int:
+        return len(self.key_df)
+
+    def _padding_data_to_same_length(self, series_: np.ndarray) -> np.ndarray:
+        if len(series_) < self.data_length:
+            padding_length = self.data_length - len(series_)
+            # TODO:計測できていないときのデータが0の場合は変更する必要がある
+            padding_data = np.zeros(padding_length)
+            series_data = np.concatenate([series_, padding_data])
+        elif len(series_) > self.data_length:
+            # print(f"[warning] data length is over.")
+            series_data = series_[: self.data_length]
+        else:
+            series_data = series_
+        return series_data
+
+    def _get_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        anglez = series_df_["anglez"].values
+        enmo = series_df_["enmo"].values
+        anglez = self._padding_data_to_same_length(anglez)
+        enmo = self._padding_data_to_same_length(enmo)
+        input_data = np.concatenate(
+            [np.expand_dims(anglez, axis=0), np.expand_dims(enmo, axis=0)]
+        )  # [channel, data_length]
+        input_data = torch.tensor(input_data, dtype=torch.float32)
+        return input_data
+
+    def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_["event"].values
+        target = self._padding_data_to_same_length(target)
+        target = np.expand_dims(target, axis=0)  # [channel=1, data_length]
+        target = torch.tensor(target, dtype=torch.long)
+        return target
+
+    def __getitem__(self, idx):
+        data_key = self.key_df["series_date_key"].iloc[idx]
+        series_data = self.series_df[self.series_df["series_date_key"] == data_key]
+        input = self._get_input_data(series_data)
+        # series_date_keyと開始時刻のstepをdictにしておく
+        input_info_dict = {
+            "series_date_key": data_key,
+            "start_step": series_data["step"].iloc[0].astype(np.int32),
+            "end_step": series_data["step"].iloc[-1].astype(np.int32),
+        }
+        if self.mode == "test":
+            return input, input_info_dict
+        else:
+            target = self._get_target_data(series_data)
+            return input, target, input_info_dict
+
+
 class DSSMeanStdsDataset(Dataset):
     def __init__(
         self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
@@ -126,6 +186,8 @@ class DSSMeanStdsDataset(Dataset):
                 "enmo",
             ]
         ].values.T
+        input_data[0] = input_data[0] / 90.0
+        input_data[1] = input_data[1] / 5.0
         for roll_num in self.mean_std_rollnum_list:
             anglez_mean = (
                 series_df_["anglez"]
@@ -154,26 +216,26 @@ class DSSMeanStdsDataset(Dataset):
             input_data = np.concatenate(
                 [
                     input_data,
-                    np.expand_dims(anglez_mean, axis=0),
-                    np.expand_dims(anglez_std, axis=0),
-                    np.expand_dims(enmo_mean, axis=0),
-                    np.expand_dims(enmo_std, axis=0),
+                    np.expand_dims(anglez_mean, axis=0) / 90.0,
+                    np.expand_dims(anglez_std, axis=0) / 5.0,
+                    np.expand_dims(enmo_mean, axis=0) / 90.0,
+                    np.expand_dims(enmo_std, axis=0) / 5.0,
                 ]
             )
         input_data = self._padding_data_to_same_length(input_data)
         input_data = torch.tensor(input_data, dtype=torch.float16)
         return input_data
 
-    def _normalize_input_data(self, input_data: pd.DataFrame) -> np.ndarray:
-        # 各ch方向で別々に正規化
-        for ch in range(input_data.shape[0]):
-            if input_data[ch].max() == input_data[ch].min():
-                continue
-            input_data[ch] = (input_data[ch] - input_data[ch].min()) / (
-                input_data[ch].max() - input_data[ch].min()
-            )
-        input_data = torch.tensor(input_data, dtype=torch.float16)
-        return input_data
+    # def _normalize_input_data(self, input_data: pd.DataFrame) -> np.ndarray:
+    #     # 各ch方向で別々に正規化
+    #     for ch in range(input_data.shape[0]):
+    #         if input_data[ch].max() == input_data[ch].min():
+    #             continue
+    #         input_data[ch] = (input_data[ch] - input_data[ch].min()) / (
+    #             input_data[ch].max() - input_data[ch].min()
+    #         )
+    #     input_data = torch.tensor(input_data, dtype=torch.float16)
+    #     return input_data
 
     def __getitem__(self, idx):
         data_key = self.key_df[idx]
@@ -181,7 +243,7 @@ class DSSMeanStdsDataset(Dataset):
         # if len(series_data) > self.data_length:
         #     print(f"[warning] data length is over. series_date_key: {data_key}")
         input = self._get_input_data(series_data)
-        input = self._normalize_input_data(input)
+        # input = self._normalize_input_data(input)
         # series_date_keyと開始時刻のstepをdictにしておく
         input_info_dict = {
             "series_date_key": data_key,
@@ -602,7 +664,7 @@ class DSSEventDetDataset(Dataset):
                 np.expand_dims(enmo, axis=0),
                 np.expand_dims(class_pred, axis=0),
             ]
-        )  # [channel, data_length]
+        )  # [channel, data_length
         input_data = torch.tensor(input_data, dtype=torch.float32)
         return input_data
 
@@ -670,6 +732,8 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSMeanStdsDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "event_detect":
             dataset = DSSEventDetDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "down_sample":
+            dataset = DSSDownSampleDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
     if mode == "train" or mode == "pseudo":
@@ -698,10 +762,11 @@ if __name__ == "__main__":
         num_workers = num_workers
         batch_size = 2
         mode = "train"
-        model_type = "event_det"
+        model_type = "down_sample"
 
-    series_df = pd.read_parquet("/kaggle/working/_oof/exp006_addlayer/oof_df.parquet")
-    print(series_df.head())
+    # series_df = pd.read_parquet("/kaggle/working/_oof/exp006_addlayer/oof_df.parquet")
+    series_df = pd.read_parquet("/kaggle/input/downsample_train_series_fold.parquet")
+    # print(series_df.head())
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     key_df["series_id"], key_df["date"] = (
         key_df["series_date_key_str"].str.split("_", 1).str
