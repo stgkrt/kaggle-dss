@@ -185,3 +185,5 @@ wandb/
 *.npy
 *.parquet
 *.yaml
+
+src/_exps/
