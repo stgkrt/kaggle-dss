@@ -16,14 +16,14 @@ epoch=10
 #                             --lr 0.001
 #     done
 
-python src/exp/run_exp.py --exp_category baseline \
-                        --exp_name exp010_meanstd_norminput \
-                        --model_type mean_stds \
-                        --input_channels 14 \
-                        --folds 0 1 2 3 4 \
-                        --n_epoch $epoch \
-                        --T_0 $epoch \
-                        --lr 0.001
+# python src/exp/run_exp.py --exp_category baseline \
+#                         --exp_name exp010_meanstd_norminput_div \
+#                         --model_type mean_stds \
+#                         --input_channels 14 \
+#                         --folds 0 1 2 3 4 \
+#                         --n_epoch $epoch \
+#                         --T_0 $epoch \
+#                         --lr 0.001
 
 # python src/exp/run_exp.py --exp_category baseline_fold0 \
 #                         --exp_name exp010_meanstd_norminput_fold0 \
@@ -33,5 +33,17 @@ python src/exp/run_exp.py --exp_category baseline \
 #                         --n_epoch $epoch \
 #                         --T_0 $epoch \
 #                         --lr 0.001
+
+df="/kaggle/input/downsample_train_series_fold_zerosec.parquet"
+python src/exp/run_exp.py --exp_category baseline \
+                        --exp_name exp011_downsample \
+                        --folds 0 1 2 3 4\
+                        --n_epoch 1 \
+                        --series_df $df \
+                        --input_channels 2 \
+                        --model_type down_sample \
+                        --n_epoch $epoch \
+                        --T_0 $epoch \
+                        --lr 0.001
 
 wandb sync --sync-all

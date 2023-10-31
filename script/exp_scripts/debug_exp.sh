@@ -5,14 +5,23 @@
 #                         --input_channels 2 \
 #                         --model_type normal
 
+# python src/exp/run_exp.py --exp_name debug \
+#                         --folds 0 \
+#                         --n_epoch 1 \
+#                         --input_channels 14 \
+#                         --model_type mean_stds \
+#                         --folds 0 \
+#                         --lr 0.001
+
+df="/kaggle/input/downsample_train_series_fold_zerosec.parquet"
 python src/exp/run_exp.py --exp_name debug \
                         --folds 0 \
                         --n_epoch 1 \
-                        --input_channels 14 \
-                        --model_type mean_stds \
+                        --series_df $df \
+                        --input_channels 2 \
+                        --model_type down_sample \
                         --folds 0 \
                         --lr 0.001
-
 
 # python src/exp/run_exp.py  --train-mode pseudo \
 #                             --exp_name pseudo_debug
