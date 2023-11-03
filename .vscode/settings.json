@@ -1,10 +1,10 @@
 {
-    "python.analysis.extraPaths": [
-        "./src/data",
-        "./src/model",
-        "./src/dss_utils",
-        "./src/exp"
-    ],
+    "[python]": {
+        "editor.codeActionsOnSave": {
+        "source.fixAll.ruff": true,
+        "source.organizeImports.ruff": true,
+        },
+    },
     "python.analysis.typeCheckingMode": "basic",
     "python.analysis.autoImportCompletions": true,
 }
