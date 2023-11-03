@@ -25,16 +25,12 @@
         "terminal.integrated.defaultProfile.linux": "bash",
         "python.formatting.provider": "none",
         "python.linting.enabled": true,
-        "python.linting.flake8Enabled": true,
-        "python.linting.flake8Args": ["--max-line-length", "88"],
         "python.linting.mypyEnabled": true,
-        "isort.args": ["--profile", "black"],
         "python.testing.unittestEnabled": false,
         "python.testing.pytestEnabled": true,
         "python.testing.pytestArgs": ["tests"],
         "autoDocstring.docstringFormat": "google",
         "[python]": {
-          "editor.defaultFormatter": "ms-python.black-formatter",
           "editor.formatOnSave": true,
           "editor.codeActionsOnSave": {
             "source.organizeImports": true
@@ -44,12 +40,8 @@
     },
     "extensions": [
       "ms-python.python",
-      "ms-python.vscode-pylance",
-      "ms-python.black-formatter",
-      "ms-python.flake8",
-      "ms-python.isort",
-      "ms-python.mypy-type-checker",
       "esbenp.prettier-vscode",
+      "charliermarsh.ruff",
       "yzhang.markdown-all-in-one",
       "tamasfe.even-better-toml",
       "redhat.vscode-yaml",
