@@ -46,15 +46,18 @@ epoch=10
 #                         --lr 0.001
 
 df="/kaggle/input/targetdownsample_train_series_fold.parquet"
-python src/exp/run_exp.py --exp_category baseline \
-                        --exp_name exp012_targetdownsample \
-                        --folds 0 1 2 3 4\
-                        --series_df $df \
-                        --input_channels 10 \
-                        --model_type target_downsample \
-                        --n_epoch $epoch \
-                        --T_0 $epoch \
-                        --lr 0.001
+for epoch in 1 5 10 20
+    do
+    python src/exp/run_exp.py --exp_category baseline \
+                            --exp_name exp012_targetdownsample_epoch${epoch} \
+                            --folds 0 1 2 3 4 \
+                            --series_df $df \
+                            --input_channels 10 \
+                            --model_type target_downsample \
+                            --n_epoch $epoch \
+                            --T_0 $epoch \
+                            --lr 0.001
+    done
 
 
 wandb sync --sync-all
