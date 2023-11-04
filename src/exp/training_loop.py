@@ -11,7 +11,8 @@ import torch
 
 warnings.filterwarnings("ignore")
 
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir))
+SRC_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.path.pardir))
 sys.path.append(os.path.join(SRC_DIR, "dss_utils"))
 sys.path.append(os.path.join(SRC_DIR, "data"))
 sys.path.append(os.path.join(SRC_DIR, "model"))
@@ -19,10 +20,15 @@ sys.path.append(os.path.join(SRC_DIR, "model"))
 from dss_dataloader import get_loader
 from dss_metrics import score
 from dss_model import get_model
-from logger import AverageMeter, ProgressLogger, WandbLogger, init_logger
+from logger import AverageMeter
+from logger import ProgressLogger
+from logger import WandbLogger
+from logger import init_logger
 from losses import get_class_criterion
-from postprocess import detect_event_from_classpred, make_submission_df
-from scheduler import get_optimizer, get_scheduler
+from postprocess import detect_event_from_classpred
+from postprocess import make_submission_df
+from scheduler import get_optimizer
+from scheduler import get_scheduler
 
 
 def seed_everything(seed=42):
@@ -36,7 +42,8 @@ def seed_everything(seed=42):
     torch.use_deterministic_algorithms = True
 
 
-def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER):
+def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer,
+             LOGGER):
     model.train()
     prog_loagger = ProgressLogger(
         data_num=len(train_loader),
@@ -75,8 +82,7 @@ def get_valid_values_dict(
         validation_dict[f"class_{mode}"] = class_values
     else:
         validation_dict[f"class_{mode}"] = np.concatenate(
-            [validation_dict[f"class_{mode}"], class_values], axis=0
-        )
+            [validation_dict[f"class_{mode}"], class_values], axis=0)
     return validation_dict
 
 
@@ -86,15 +92,14 @@ def concat_valid_input_info(valid_input_info: dict, input_info: dict) -> dict:
         valid_input_info["start_step"] = input_info["start_step"]
         valid_input_info["end_step"] = input_info["end_step"]
     else:
-        valid_input_info["series_date_key"] = np.concatenate(
-            [valid_input_info["series_date_key"], input_info["series_date_key"]], axis=0
-        )
+        valid_input_info["series_date_key"] = np.concatenate([
+            valid_input_info["series_date_key"], input_info["series_date_key"]
+        ],
+                                                             axis=0)
         valid_input_info["start_step"] = np.concatenate(
-            [valid_input_info["start_step"], input_info["start_step"]], axis=0
-        )
+            [valid_input_info["start_step"], input_info["start_step"]], axis=0)
         valid_input_info["end_step"] = np.concatenate(
-            [valid_input_info["end_step"], input_info["end_step"]], axis=0
-        )
+            [valid_input_info["end_step"], input_info["end_step"]], axis=0)
     return valid_input_info
 
 
@@ -111,9 +116,14 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
     )
     valid_predictions = {"class_preds": np.empty(0)}
     valid_targets = {"class_targets": np.empty(0)}
-    valid_input_info = {"series_date_key": [], "start_step": [], "end_step": []}
+    valid_input_info = {
+        "series_date_key": [],
+        "start_step": [],
+        "end_step": []
+    }
 
-    for batch_idx, (inputs, targets, input_info_dict) in enumerate(valid_loader):
+    for batch_idx, (inputs, targets,
+                    input_info_dict) in enumerate(valid_loader):
         inputs = inputs.to(CFG.device, non_blocking=True).float()
         targets = targets.to(CFG.device, non_blocking=True).float()
         with torch.no_grad():
@@ -123,11 +133,14 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
         losses.update(loss.item(), CFG.batch_size)
         prog_loagger.log_progress(epoch, batch_idx, losses)
 
-        valid_predictions = get_valid_values_dict(
-            preds, valid_predictions, mode="preds"
-        )
-        valid_targets = get_valid_values_dict(targets, valid_targets, mode="targets")
-        valid_input_info = concat_valid_input_info(valid_input_info, input_info_dict)
+        valid_predictions = get_valid_values_dict(preds,
+                                                  valid_predictions,
+                                                  mode="preds")
+        valid_targets = get_valid_values_dict(targets,
+                                              valid_targets,
+                                              mode="targets")
+        valid_input_info = concat_valid_input_info(valid_input_info,
+                                                   input_info_dict)
 
     del inputs, preds, targets
     gc.collect()
@@ -145,44 +158,43 @@ def get_oof_df(
     valid_preds_dict: dict,
     valid_targets_dict: dict,
     oof_df_fold: pd.DataFrame,
+    config,
 ) -> pd.DataFrame:
     start_time = time.time()
     print("creating oof_df", end=" ... ")
+    print("inf df", oof_df_fold[oof_df_fold["step"] == np.inf])
     for idx, (series_date_key, start_step, end_step) in enumerate(
-        zip(
-            valid_input_info_dict["series_date_key"],
-            valid_input_info_dict["start_step"],
-            valid_input_info_dict["end_step"],
-        )
-    ):
+            zip(
+                valid_input_info_dict["series_date_key"],
+                valid_input_info_dict["start_step"],
+                valid_input_info_dict["end_step"],
+            )):
         # preds targets shape: [batch, ch, data_length]
         class_pred = valid_preds_dict["class_preds"][idx]
         class_target = valid_targets_dict["class_targets"][idx]
-        data_condition = (
-            (oof_df_fold["series_date_key"] == series_date_key)
-            & (start_step <= oof_df_fold["step"])
-            & (oof_df_fold["step"] <= end_step + 1)
-        )
+        data_condition = ((oof_df_fold["series_date_key"] == series_date_key)
+                          & (start_step <= oof_df_fold["step"])
+                          & (oof_df_fold["step"] <= end_step + 1))
         series_date_data_num = len((oof_df_fold[data_condition]))
         # steps = range(start_step, end_step + 1, 1)
-        steps = range(start_step, start_step + series_date_data_num, 1)
+        if config.model_type == "downsample":
+            steps = range(start_step, end_step + 1, 12)
+        else:
+            steps = range(start_step, start_step + series_date_data_num, 1)
         if series_date_data_num < len(class_pred[0]):
             class_pred = class_pred[0, :series_date_data_num]
             class_target = class_target[0, :series_date_data_num]
         elif series_date_data_num > len(class_pred[0]):
             padding_num = series_date_data_num - len(class_pred[0])
             class_pred = np.concatenate(
-                [class_pred[0], -1 * np.ones(padding_num)], axis=0
-            )
+                [class_pred[0], -1 * np.ones(padding_num)], axis=0)
             class_target = np.concatenate(
-                [class_target[0], -1 * np.ones(padding_num)], axis=0
-            )
+                [class_target[0], -1 * np.ones(padding_num)], axis=0)
         else:
             class_pred = class_pred[0]
             class_target = class_target[0]
-        if not (len(class_pred) == len(class_target)) or not (
-            len(class_pred) == len(steps)
-        ):
+        if not (len(class_pred) == len(class_target)) or not (len(class_pred)
+                                                              == len(steps)):
             print("len(class_pred)", len(class_pred))
             print("len(class_target)", len(class_target))
             print("len(steps)", len(steps))
@@ -196,11 +208,11 @@ def get_oof_df(
 
 
 def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
-    key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
+    key_df = series_df[["series_date_key",
+                        "series_date_key_str"]].drop_duplicates()
     key_df = key_df.reset_index(drop=True)
     key_df["series_id"], key_df["date"] = (
-        key_df["series_date_key_str"].str.split("_", 1).str
-    )
+        key_df["series_date_key_str"].str.split("_", 1).str)
     key_df = key_df.drop(columns=["series_date_key_str"], axis=1)
     return key_df
 
@@ -250,8 +262,14 @@ def training_loop(CFG, LOGGER):
         LOGGER.info(f"fold[{fold}] valid data key num: {valid_key_num}")
         if train_key_num + valid_key_num != len(key_df):
             raise ValueError("train/valid data key num is not same")
-        train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
-        valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
+        train_loader = get_loader(CFG,
+                                  train_key_df,
+                                  train_series_df,
+                                  mode="train")
+        valid_loader = get_loader(CFG,
+                                  valid_key_df,
+                                  valid_series_df,
+                                  mode="valid")
         LOGGER.info(f"fold[{fold}] get_loader finished")
 
         oof_df_fold = valid_series_df.copy()
@@ -260,8 +278,8 @@ def training_loop(CFG, LOGGER):
             "class_target",
         ]
         oof_df_fold = oof_df_fold.assign(
-            **{col: -1 * np.ones(len(oof_df_fold)) for col in init_cols}
-        )
+            **{col: -1 * np.ones(len(oof_df_fold))
+               for col in init_cols})
 
         for epoch in range(0, CFG.n_epoch):
             LOGGER.info(f"- epoch:{epoch} -")
@@ -306,8 +324,7 @@ def training_loop(CFG, LOGGER):
         model_path = os.path.join(CFG.exp_dir, f"fold{fold}_model.pth")
         torch.save(model.state_dict(), model_path)
         if len(oof_df_fold["series_date_key"].unique()) != len(
-            valid_series_df["series_date_key"].unique()
-        ):
+                valid_series_df["series_date_key"].unique()):
             raise ValueError("oof data key num is not same")
         del (
             model,
@@ -325,10 +342,15 @@ def training_loop(CFG, LOGGER):
             valid_predictions,
             valid_targets,
             oof_df_fold,
+            CFG,
         )
         LOGGER.info(f"fold{fold} oof_df created.")
-        oof_df_fold = detect_event_from_classpred(oof_df_fold)
-
+        if "downsample" in CFG.model_type:
+            oof_df_fold = detect_event_from_classpred(oof_df_fold,
+                                                      N=21,
+                                                      maxpool_kernel_size=3)
+        else:
+            oof_df_fold = detect_event_from_classpred(oof_df_fold)
         oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
         os.makedirs(oof_dir, exist_ok=True)
         oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
@@ -340,7 +362,8 @@ def training_loop(CFG, LOGGER):
         del oof_df_fold
         gc.collect()
 
-        event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
+        event_df_fold = event_df[event_df["series_id"].isin(
+            valid_key_df["series_id"])]
         event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
         oof_score = score(event_df_fold, oof_scoring_df)
         oof_score_list.append(oof_score)
@@ -373,12 +396,10 @@ if __name__ == "__main__":
         EXP_NAME = "no_scoring_check"
 
         # directory
-        INPUT_DIR = os.path.abspath(
-            os.path.join(
-                ROOT_DIR,
-                "input",
-            )
-        )
+        INPUT_DIR = os.path.abspath(os.path.join(
+            ROOT_DIR,
+            "input",
+        ))
         COMPETITION_DIR = os.path.join(
             INPUT_DIR,
             "child-mind-institute-detect-sleep-states",
@@ -387,11 +408,11 @@ if __name__ == "__main__":
         # TRAIN_DIR = os.path.join(COMPETITION_DIR, "train")
         # TEST_DIR = os.path.join(COMPETITION_DIR, "test")
         key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
-        series_df = os.path.join(INPUT_DIR, "processed_train_withkey_nonull.parquet")
+        series_df = os.path.join(INPUT_DIR,
+                                 "processed_train_withkey_nonull.parquet")
         # event_df = os.path.join(INPUT_DIR, "train_events.csv")
         event_df = os.path.join(
-            "/kaggle/input/preprocessed_train_event_notnull.parquet"
-        )
+            "/kaggle/input/preprocessed_train_event_notnull.parquet")
         # data
         # folds = [0, 1, 2, 3, 4]
         folds = [0]
