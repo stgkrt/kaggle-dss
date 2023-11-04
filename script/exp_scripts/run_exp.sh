@@ -34,16 +34,27 @@ epoch=10
 #                         --T_0 $epoch \
 #                         --lr 0.001
 
-df="/kaggle/input/downsample_train_series_fold_zerosec.parquet"
+# df="/kaggle/input/downsample_train_series_fold_zerosec.parquet"
+# python src/exp/run_exp.py --exp_category baseline \
+#                         --exp_name exp011_downsample_norm \
+#                         --folds 0 1 2 3 4\
+#                         --series_df $df \
+#                         --input_channels 2 \
+#                         --model_type downsample \
+#                         --n_epoch $epoch \
+#                         --T_0 $epoch \
+#                         --lr 0.001
+
+df="/kaggle/input/targetdownsample_train_series_fold.parquet"
 python src/exp/run_exp.py --exp_category baseline \
-                        --exp_name exp011_downsample \
+                        --exp_name exp012_targetdownsample \
                         --folds 0 1 2 3 4\
-                        --n_epoch 1 \
                         --series_df $df \
-                        --input_channels 2 \
-                        --model_type down_sample \
+                        --input_channels 10 \
+                        --model_type target_downsample \
                         --n_epoch $epoch \
                         --T_0 $epoch \
                         --lr 0.001
+
 
 wandb sync --sync-all

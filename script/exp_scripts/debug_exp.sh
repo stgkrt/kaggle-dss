@@ -13,15 +13,26 @@
 #                         --folds 0 \
 #                         --lr 0.001
 
-df="/kaggle/input/downsample_train_series_fold_zerosec.parquet"
+# df="/kaggle/input/downsample_train_series_fold_zerosec.parquet"
+# python src/exp/run_exp.py --exp_name debug \
+#                         --folds 0 \
+#                         --n_epoch 1 \
+#                         --series_df $df \
+#                         --input_channels 2 \
+#                         --model_type downsample \
+#                         --folds 0 \
+#                         --lr 0.001
+
+df="/kaggle/input/targetdownsample_train_series_fold.parquet"
 python src/exp/run_exp.py --exp_name debug \
                         --folds 0 \
                         --n_epoch 1 \
                         --series_df $df \
-                        --input_channels 2 \
-                        --model_type down_sample \
+                        --input_channels 10 \
+                        --model_type target_downsample \
                         --folds 0 \
                         --lr 0.001
+
 
 # python src/exp/run_exp.py  --train-mode pseudo \
 #                             --exp_name pseudo_debug
