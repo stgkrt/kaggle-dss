@@ -5,10 +5,13 @@ import sys
 import torch
 from eventdet_training_loop import eventdet_training_loop
 from pseudo_training_loop import pseudo_training_loop
-from training_loop import seed_everything, training_loop
+from training_loop import seed_everything
+from training_loop import training_loop
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from logger import init_logger, save_config, set_wandb_make_dir
+from logger import init_logger
+from logger import save_config
+from logger import set_wandb_make_dir
 
 os.environ["WANDB_SILENT"] = "true"
 os.environ["WANDB_MODE"] = "offline"
@@ -16,9 +19,10 @@ os.environ["WANDB_MODE"] = "offline"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="run experiment.")
-    parser.add_argument(
-        "--train-mode", type=str, default="train", help="train or pseudo"
-    )
+    parser.add_argument("--train-mode",
+                        type=str,
+                        default="train",
+                        help="train or pseudo")
     parser.add_argument(
         "--competition_name",
         type=str,
@@ -51,9 +55,8 @@ def parse_args():
     parser.add_argument(
         "--competition_dir",
         type=str,
-        default=os.path.join(
-            root_dir, "input", "child-mind-institute-detect-sleep-states"
-        ),
+        default=os.path.join(root_dir, "input",
+                             "child-mind-institute-detect-sleep-states"),
         help="competition directory.",
     )
     parser.add_argument(
@@ -96,7 +99,7 @@ def parse_args():
     parser.add_argument("--folds", type=int, nargs="*", default=[0])
     parser.add_argument("--seed", type=int, default=42)
     # parser.add_argument("--num_workers", type=int, default=os.cpu_count())
-    parser.add_argument("--num_workers", type=int, default=6)
+    parser.add_argument("--num_workers", type=int, default=2)
 
     # model
     parser.add_argument("--model_type", type=str, default="normal")
