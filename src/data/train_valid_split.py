@@ -5,8 +5,7 @@ def get_group_groupkfold_split(df, CFG):
     gkf = GroupKFold(n_splits=CFG.n_folds)
     df["fold"] = -1
     for fold, (_, valid_idx) in enumerate(
-        gkf.split(df, groups=df[CFG.group_key].values)
-    ):
+            gkf.split(df, groups=df[CFG.group_key].values)):
         df.loc[valid_idx, "fold"] = fold
     return df
 
@@ -37,18 +36,21 @@ if __name__ == "__main__":
 
     # filename = "/kaggle/input/preprocessed_train_series_notnull.parquet"
     # output_filename = "/kaggle/input/preprocessed_train_series_notnull_fold.parquet"
-    filename = "/kaggle/input/downsample_train_series_event.parquet"
-    output_filename = "/kaggle/input/downsample_train_series_fold.parquet"
+    # filename = "/kaggle/input/downsample_train_series_event.parquet"
+    # output_filename = "/kaggle/input/downsample_train_series_fold.parquet"
+
+    filename = "/kaggle/input/targetdownsample_train_series_event.parquet"
+    output_filename = "/kaggle/input/targetdownsample_train_series_fold.parquet"
     series_df = pd.read_parquet(filename)
     print("series_df loaded.")
     series_df["event"] = series_df["event"].fillna(-1)
     print("series_df", series_df.head())
-    key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
+    key_df = series_df[["series_date_key",
+                        "series_date_key_str"]].drop_duplicates()
     print("key_df from series_df", key_df.head())
     key_df = key_df.reset_index(drop=True)
     key_df["series_id"], key_df["date"] = (
-        key_df["series_date_key_str"].str.split("_", 1).str
-    )
+        key_df["series_date_key_str"].str.split("_", 1).str)
     key_df = key_df.drop(columns=["series_date_key_str"], axis=1)
     print("get key_df", key_df.head())
     key_df = get_group_groupkfold_split(key_df, CFG)
