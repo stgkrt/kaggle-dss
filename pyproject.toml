@@ -9,8 +9,6 @@ select = [
     "Q",
 ]
 line-length = 88
-[tool.ruff.flake8-quotes]
-inline-quotes = "single"
 
 [tool.ruff.isort]
 force-single-line = true
