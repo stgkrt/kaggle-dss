@@ -262,6 +262,7 @@ def get_downsample_oof_df(
                            oof_pred_target_df,
                            on=["series_date_key", "step"],
                            how="left")
+    oof_df_fold["class_pred"] = oof_df_fold["class_pred"].fillna(-1)
     merge_elapsed = int(time.time() - merge_start_time) / 60
     print("merge elapsed time: {:.2f} min".format(merge_elapsed))
     elapsed = int(time.time() - start_time) / 60

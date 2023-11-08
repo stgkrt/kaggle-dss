@@ -3,6 +3,7 @@ import os
 import sys
 
 import torch
+from eventclass_training_loop import eventclass_training_loop
 from eventdet_training_loop import eventdet_training_loop
 from pseudo_training_loop import pseudo_training_loop
 from training_loop import seed_everything
@@ -19,10 +20,9 @@ os.environ["WANDB_MODE"] = "offline"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="run experiment.")
-    parser.add_argument("--train-mode",
-                        type=str,
-                        default="train",
-                        help="train or pseudo")
+    parser.add_argument(
+        "--train-mode", type=str, default="train", help="train or pseudo"
+    )
     parser.add_argument(
         "--competition_name",
         type=str,
@@ -55,8 +55,9 @@ def parse_args():
     parser.add_argument(
         "--competition_dir",
         type=str,
-        default=os.path.join(root_dir, "input",
-                             "child-mind-institute-detect-sleep-states"),
+        default=os.path.join(
+            root_dir, "input", "child-mind-institute-detect-sleep-states"
+        ),
         help="competition directory.",
     )
     parser.add_argument(
@@ -149,6 +150,10 @@ if __name__ == "__main__":
     if config.train_mode == "train":
         if config.model_type == "event_detect":
             eventdet_training_loop(config, logger)
+        elif config.model_type == "target_downsample_event":
+            eventdet_training_loop(config, logger)
+        elif config.model_type == "input_target_downsample_3ch":
+            eventclass_training_loop(config, logger)
         else:
             training_loop(config, logger)
     elif config.train_mode == "pseudo":
