@@ -6,7 +6,7 @@
     "files.trimFinalNewlines": true,
     "[python]": {
         "diffEditor.ignoreTrimWhitespace": false,
-        "editor.defaultFormatter": "eeyore.yapf",
+        "editor.defaultFormatter": "ms-python.black-formatter",
         "editor.formatOnSaveMode": "file",
         "editor.formatOnSave": true,
         "editor.wordBasedSuggestions": false,
