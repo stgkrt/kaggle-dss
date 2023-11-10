@@ -889,6 +889,93 @@ class DSSUTimeTD3chModel(nn.Module):
         return class_output
 
 
+class DenseDownsample(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        # self.downsample_kernelsize_list = [13, 121, 361, 721, 1441, 2881]
+        self.downsample_kernelsize_list = [13, 121, 361, 721]
+        # self.downsample_kernelsize_list = [13, 121, 361]
+        self.dense_downsample_conv = nn.ModuleList()
+        for kernel_size in self.downsample_kernelsize_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_downsample_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        config.input_channels,
+                        config.embedding_base_channels,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(config.embedding_base_channels),
+                    nn.ReLU(),
+                )
+            )
+        self.conv1 = nn.Conv1d(
+            config.embedding_base_channels * len(self.downsample_kernelsize_list),
+            config.embedding_base_channels,
+            kernel_size=1,
+            stride=1,
+        )
+
+    def forward(self, x):
+        x = torch.cat([conv(x) for conv in self.dense_downsample_conv], dim=1)
+        x = self.conv1(x)
+        return x
+
+
+class DSSUTimeDenseTDModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.dense_downsample_conv = DenseDownsample(config)
+        self.encoder = EncoderTD(config.input_channels, config.embedding_base_channels)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = DecoderTD(
+            config.embedding_base_channels, skip_connections_length
+        )
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            # downsample
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                1,
+                kernel_size=1,
+                stride=1,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440]
+
+    def forward(self, x):
+        x = self.dense_downsample_conv(x)
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
 def get_model(config):
     print("model type = ", config.model_type)
     if config.model_type == "event_output":
@@ -905,6 +992,10 @@ def get_model(config):
         model = DSSUTimeTDModel(config)
     elif config.model_type == "input_target_downsample_3ch":
         model = DSSUTimeTD3chModel(config)
+    elif config.model_type == "input_target_downsample_dt":
+        model = DSSUTimeTDModel(config)
+    elif config.model_type == "input_target_downsample_dense":
+        model = DSSUTimeDenseTDModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -913,7 +1004,7 @@ def get_model(config):
 if __name__ == "__main__":
 
     class config:
-        model_type = "input_target_downsample"
+        model_type = "input_target_downsample_dense"
         input_channels = 6
         embedding_base_channels = 16
         class_output_channels = 1
@@ -933,7 +1024,6 @@ if __name__ == "__main__":
     else:
         x = torch.randn(config.batch_size, config.input_channels, 17280)
     print("input shape: ", x.shape)
-    # model = get_model(config)
     model = get_model(config)
     output = model(x)
     print("output shape", output.shape)

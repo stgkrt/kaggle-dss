@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd  # type: ignore
 import torch
 import torch.nn as nn
+from scipy import signal
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
@@ -163,6 +164,15 @@ class DSSTargetDownsampleDataset(Dataset):
             series_data = series_
         return series_data
 
+    def _to_coord(self, x: np.ndarray, max_: int) -> np.ndarray:
+        rad = 2 * np.pi * (x % max_) / max_
+        x_sin = np.sin(rad)
+        x_cos = np.cos(rad)
+        x_sincos = np.concatenate(
+            [np.expand_dims(x_sin, axis=0), np.expand_dims(x_cos, axis=0)], axis=0
+        )
+        return x_sincos
+
     def _get_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
         input_data = series_df_[
             [
@@ -186,6 +196,139 @@ class DSSTargetDownsampleDataset(Dataset):
                     # np.expand_dims(enmo_std, axis=0),
                 ]
             )
+        # hour = series_df_["hour"].values
+        # hour_sincos = self._to_coord(hour, max_=24)
+        # input_data = np.concatenate(
+        #     [
+        #         input_data,
+        #         hour_sincos,
+        #     ]
+        # )
+        input_data = self._padding_data_to_same_length(input_data, input_type="input")
+        input_data = torch.tensor(input_data, dtype=torch.float32)
+        return input_data
+
+    def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        target = series_df_[series_df_["second"] == 0]["event"].values
+        target = self._padding_data_to_same_length(target, input_type="target")
+        target = np.expand_dims(target, axis=0)  # [channel=1, data_length]
+        target = torch.tensor(target, dtype=torch.long)
+        return target
+
+    def _get_flip_data(self, input_tensor: torch.Tensor, target_tensor: torch.Tensor):
+        if np.random.rand() > 0.5:
+            input_tensor = torch.flip(input_tensor, dims=[-1])
+            target_tensor = torch.flip(target_tensor, dims=[-1])
+        return input_tensor, target_tensor
+
+    def _get_roll_data(self, input_tensor: torch.Tensor, target_tensor: torch.Tensor):
+        if np.random.rand() > 0.5:
+            shit_num = np.random.randint(10, 17280 // 3)
+            input_tensor = torch.roll(input_tensor, shifts=shit_num, dims=-1)
+            target_tensor = torch.roll(target_tensor, shifts=shit_num // 12, dims=-1)
+        return input_tensor, target_tensor
+
+    def __getitem__(self, idx):
+        data_key = self.key_df["series_date_key"].iloc[idx]
+        series_data = self.series_df[self.series_df["series_date_key"] == data_key]
+        input = self._get_input_data(series_data)
+        # series_date_keyと開始時刻のstepをdictにしておく
+        input_info_dict = {
+            "series_date_key": data_key,
+            "start_step": series_data["step"].iloc[0].astype(np.int32),
+            "end_step": series_data["step"].iloc[-1].astype(np.int32),
+        }
+        if self.mode == "test":
+            return input, input_info_dict
+        elif self.mode == "train":
+            target = self._get_target_data(series_data)
+            input, target = self._get_flip_data(input, target)
+            return input, target, input_info_dict
+        else:
+            target = self._get_target_data(series_data)
+            return input, target, input_info_dict
+
+
+# 微分を追加DTDT
+class DSSTargetDownsampleDTDataset(Dataset):
+    def __init__(
+        self, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "train"
+    ) -> None:
+        self.key_df = key_df
+        self.series_df = series_df
+        self.mode = mode
+        self.mean_std_rollnum_list = [36, 60]
+        self.input_data_length = 17280
+        self.target_data_length = 1440  # 17280/12
+
+    def __len__(self) -> int:
+        return len(self.key_df)
+
+    def _padding_data_to_same_length(
+        self, series_: np.ndarray, input_type="input"
+    ) -> np.ndarray:
+        if input_type == "input":
+            data_length = self.input_data_length
+        elif input_type == "target":
+            data_length = self.target_data_length
+        else:
+            raise ValueError("input_type must be input or target.")
+        if series_.shape[-1] < data_length:  # [ch, data_len] or [data_len,]
+            padding_length = data_length - series_.shape[-1]
+            padding_data = np.zeros(padding_length)
+            if series_.ndim != 1:
+                padding_data = np.expand_dims(padding_data, axis=0)
+                padding_data = np.tile(padding_data, (series_.shape[0], 1))
+            series_data = np.concatenate([series_, padding_data], axis=-1)
+        elif len(series_) > data_length:
+            # print(f"[warning] data length is over.")
+            series_data = series_[:data_length]
+        else:
+            series_data = series_
+        return series_data
+
+    def _to_coord(self, x: np.ndarray, max_: int) -> np.ndarray:
+        rad = 2 * np.pi * (x % max_) / max_
+        x_sin = np.sin(rad)
+        x_cos = np.cos(rad)
+        x_sincos = np.concatenate(
+            [np.expand_dims(x_sin, axis=0), np.expand_dims(x_cos, axis=0)], axis=0
+        )
+        return x_sincos
+
+    def _get_input_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+        input_data = series_df_[
+            [
+                "anglez",
+                "enmo",
+            ]
+        ].values.T
+        input_data[0] = input_data[0] / 90.0
+        input_data[1] = input_data[1] / 5.0
+        smooth_input = signal.savgol_filter(input_data[0], 60, 2, deriv=1, axis=0)
+        # なめらかにした
+        input_onederiv = (
+            signal.savgol_filter(input_data[0], 12, 2, deriv=1, axis=0) * 5
+        )  # 1次微分
+
+        input_data = np.concatenate(
+            [
+                input_data,
+                np.expand_dims(smooth_input, axis=0),
+                np.expand_dims(input_onederiv, axis=0),
+            ]
+        )
+        for roll_num in self.mean_std_rollnum_list:
+            anglez_mean = series_df_[f"anglez_mean_{roll_num}"].values / 90.0
+            anglez_std = series_df_[f"anglez_std_{roll_num}"].values
+            input_data = np.concatenate(
+                [
+                    input_data,
+                    np.expand_dims(anglez_mean, axis=0),
+                    np.expand_dims(anglez_std, axis=0),
+                ]
+            )
+
         input_data = self._padding_data_to_same_length(input_data, input_type="input")
         input_data = torch.tensor(input_data, dtype=torch.float32)
         return input_data
@@ -1080,6 +1223,8 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSTargetDownsampleDataset(
                 key_df, series_df, mode
             )  # type: ignore
+        elif CFG.model_type == "input_target_downsample_dense":
+            dataset = DSSTargetDownsampleDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "input_target_downsample_3ch":
             dataset = DSSTargetDownsample3chDataset(
                 key_df, series_df, mode
@@ -1088,6 +1233,8 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSTargetDownsampleEventDataset(
                 key_df, series_df, mode
             )  # type: ignore
+        elif CFG.model_type == "input_target_downsample_dt":
+            dataset = DSSTargetDownsampleDTDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
     if mode == "train" or mode == "pseudo":
@@ -1114,14 +1261,14 @@ if __name__ == "__main__":
         batch_size = 2
         mode = "train"
         # model_type = "target_downsample_event"
-        model_type = "input_target_downsample_3ch"
+        # model_type = "input_target_downsample_3ch"
+        # model_type = "input_target_downsample"
+        model_type = "input_target_downsample_dense"
 
-    # series_df = pd.read_parquet("/kaggle/working/_oof/exp006_addlayer/oof_df.parquet")
-    # series_df = pd.read_parquet(
-    #     "/kaggle/input/downsample_train_series_fold.parquet")
     series_df = pd.read_parquet(
-        "/kaggle/input/targetdownsample_train_series_fold.parquet"
+        "/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
     )
+
     # print(series_df.head())
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     key_df["series_id"], key_df["date"] = (
