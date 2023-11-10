@@ -39,6 +39,9 @@ def pl_datetime_preprocess(train_series_):
         pl.col("timestamp").dt.minute().cast(pl.Int32).alias("minute")
     )
     train_series_ = train_series_.with_columns(
+        pl.col("timestamp").dt.hour().cast(pl.Int32).alias("hour")
+    )
+    train_series_ = train_series_.with_columns(
         pl.col("timestamp").dt.date().cast(str).alias("date")
     )
     return train_series_
@@ -54,20 +57,8 @@ def preprocess_input(train_series_: pd.DataFrame) -> pd.DataFrame:
             .mean()
             .reset_index(0, drop=True)
         )
-        train_series_[f"enmo_mean_{roll_num}"] = (
-            train_series_.groupby("series_id")["enmo"]
-            .rolling(roll_num, center=True)
-            .mean()
-            .reset_index(0, drop=True)
-        )
         train_series_[f"anglez_std_{roll_num}"] = (
             train_series_.groupby("series_id")["anglez"]
-            .rolling(roll_num, center=True)
-            .std()
-            .reset_index(0, drop=True)
-        )
-        train_series_[f"enmo_std_{roll_num}"] = (
-            train_series_.groupby("series_id")["enmo"]
             .rolling(roll_num, center=True)
             .std()
             .reset_index(0, drop=True)
@@ -75,14 +66,8 @@ def preprocess_input(train_series_: pd.DataFrame) -> pd.DataFrame:
         train_series_[f"anglez_mean_{roll_num}"] = train_series_[
             f"anglez_mean_{roll_num}"
         ].fillna(0)
-        train_series_[f"enmo_mean_{roll_num}"] = train_series_[
-            f"enmo_mean_{roll_num}"
-        ].fillna(0)
         train_series_[f"anglez_std_{roll_num}"] = train_series_[
             f"anglez_std_{roll_num}"
-        ].fillna(0)
-        train_series_[f"enmo_std_{roll_num}"] = train_series_[
-            f"enmo_std_{roll_num}"
         ].fillna(0)
 
     return train_series_
@@ -212,5 +197,5 @@ if __name__ == "__main__":
     print(len(train_series_df))
 
     train_series_df.to_parquet(
-        "/kaggle/input/targetdownsample_train_series_event3ch.parquet"
+        "/kaggle/input/targetdownsample_train_series_hour.parquet"
     )

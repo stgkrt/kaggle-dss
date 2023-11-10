@@ -43,8 +43,11 @@ if __name__ == "__main__":
     # filename = "/kaggle/input/targetdownsample_train_series_event.parquet"
     # output_filename = "/kaggle/input/targetdownsample_train_series_fold.parquet"
 
-    filename = "/kaggle/input/targetdownsample_train_series_event3ch.parquet"
-    output_filename = "/kaggle/input/targetdownsample_train_series_3ch_fold.parquet"
+    # filename = "/kaggle/input/targetdownsample_train_series_event3ch.parquet"
+    # output_filename = "/kaggle/input/targetdownsample_train_series_3ch_fold.parquet"
+
+    filename = "/kaggle/input/targetdownsample_train_series_hour.parquet"
+    output_filename = "/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
     series_df = pd.read_parquet(filename)
     print("series_df loaded.")
     series_df["event"] = series_df["event"].fillna(-1)
