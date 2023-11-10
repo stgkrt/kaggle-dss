@@ -57,16 +57,50 @@ epoch=10
 #                         --lr 0.001
 
 
-df="/kaggle/input/targetdownsample_train_series_fold.parquet"
-python src/exp/run_exp.py --exp_category baseline_fold0 \
-                        --exp_name exp017_inputtargettd_flip_epoch${epoch}_lr05_fold0 \
-                        --folds 0 \
-                        --series_df $df \
-                        --input_channels 6 \
-                        --model_type input_target_downsample \
+# df="/kaggle/input/targetdownsample_train_series_fold.parquet"
+# python src/exp/run_exp.py --exp_category baseline_fold0 \
+#                         --exp_name exp017_inputtargettd_flip_epoch${epoch}_lr05_fold0 \
+#                         --folds 0 \
+#                         --series_df $df \
+#                         --input_channels 6 \
+#                         --model_type input_target_downsample \
+#                         --n_epoch $epoch \
+#                         --T_0 $epoch \
+#                         --lr 0.0005
+
+# df="/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
+# python src/exp/run_exp.py --exp_category baseline \
+#                         --exp_name exp018_inputtargetd_hour_notflip_epoch${epoch} \
+#                         --folds 0 1 2 3 4 \
+#                         --n_epoch $epoch \
+#                         --T_0 $epoch \
+#                         --series_df $df \
+#                         --input_channels 8 \
+#                         --model_type input_target_downsample \
+#                         --lr 0.001
+    
+# df="/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
+# python src/exp/run_exp.py --exp_category baseline_fold0 \
+#                         --exp_name exp019_deriv_meanstd_epoch${epoch}_fold0 \
+#                         --folds 0 \
+#                         --n_epoch $epoch \
+#                         --T_0 $epoch \
+#                         --series_df $df \
+#                         --input_channels 8 \
+#                         --model_type input_target_downsample_dt \
+#                         --lr 0.001
+
+df="/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
+python src/exp/run_exp.py --exp_category baseline \
+                        --exp_name exp020_dense_chh_epoch${epoch} \
+                        --folds 0 1 2 3 4 \
                         --n_epoch $epoch \
                         --T_0 $epoch \
-                        --lr 0.0005
+                        --series_df $df \
+                        --input_channels 6 \
+                        --model_type input_target_downsample_dense \
+                        --lr 0.001
+
 
 # df="/kaggle/input/targetdownsample_train_series_fold.parquet"
 # df="/kaggle/input/targetdownsample_train_series_3ch_fold.parquet"
