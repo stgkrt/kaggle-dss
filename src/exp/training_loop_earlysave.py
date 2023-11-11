@@ -273,6 +273,54 @@ def get_downsample_oof_df(
     return oof_df_fold
 
 
+def get_oof_df_and_fold_score(
+    CFG,
+    LOGGER,
+    input_info_dict_list,
+    valid_predictions,
+    valid_targets,
+    valid_key_df,
+    oof_df_fold,
+    event_df,
+    fold,
+    epoch,
+):
+    if "downsample" in CFG.model_type:
+        oof_df_fold = get_downsample_oof_df(
+            input_info_dict_list,
+            valid_predictions,
+            valid_targets,
+            oof_df_fold,
+            CFG,
+        )
+    else:
+        oof_df_fold = get_oof_df(
+            input_info_dict_list,
+            valid_predictions,
+            valid_targets,
+            oof_df_fold,
+            CFG,
+        )
+    oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
+    oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
+    print("save oof_df to ", oof_df_fold_path)
+    oof_df_fold.to_parquet(oof_df_fold_path)
+    LOGGER.info(f"fold{fold} oof_df created.")
+    if "downsample" in CFG.model_type:
+        oof_df_fold = detect_event_from_downsample_classpred(oof_df_fold)
+    else:
+        oof_df_fold = detect_event_from_classpred(oof_df_fold)
+    LOGGER.info(f"fold{fold} event detected.")
+    oof_scoring_df = make_submission_df(oof_df_fold)
+    LOGGER.info(f"fold{fold} submission df created.")
+
+    event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
+    event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
+    oof_score = score(event_df_fold, oof_scoring_df)
+    LOGGER.info(f"fold{fold} epoch {epoch} oof score: {oof_score:.4f}")
+    return oof_df_fold, oof_score
+
+
 def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
     key_df = series_df[["series_date_key", "series_date_key_str"]].drop_duplicates()
     key_df = key_df.reset_index(drop=True)
@@ -283,7 +331,7 @@ def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
     return key_df
 
 
-def training_loop(CFG, LOGGER):
+def training_loop_earlysave(CFG, LOGGER):
     # key_df = pd.read_csv(CFG.key_df)
     LOGGER.info("loading series_df")
     series_df = pd.read_parquet(CFG.series_df)
@@ -294,7 +342,9 @@ def training_loop(CFG, LOGGER):
     event_df = pd.read_csv(os.path.join(CFG.event_df))
     event_df = event_df[event_df["series_id"].isin(series_df["series_id"])]
     # oof_df = pd.DataFrame()
-    oof_score_list = []
+    best_score_list = []
+    oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
+    os.makedirs(oof_dir, exist_ok=True)
     for fold in CFG.folds:
         LOGGER.info(f"-- fold{fold} training start --")
         wandb_logger = WandbLogger(CFG)
@@ -310,14 +360,6 @@ def training_loop(CFG, LOGGER):
         start_time = time.time()
 
         LOGGER.info(f"fold[{fold}] loading train/valid data")
-        # separate train/valid data
-        # train_key_df, valid_key_df = get_train_valid_key_df(key_df, fold, CFG)
-        # train_series_df = get_train_valid_series_df(
-        #     series_df, key_df, fold, mode="train"
-        # )
-        # valid_series_df = get_train_valid_series_df(
-        #     series_df, key_df, fold, mode="valid"
-        # )
         train_series_df = series_df[series_df["fold"] != fold]
         train_key_df = get_key_df(train_series_df)
         valid_series_df = series_df[series_df["fold"] == fold]
@@ -340,7 +382,7 @@ def training_loop(CFG, LOGGER):
         oof_df_fold = oof_df_fold.assign(
             **{col: -1 * np.ones(len(oof_df_fold)) for col in init_cols}
         )
-
+        fold_best_score = 0.0
         for epoch in range(0, CFG.n_epoch):
             LOGGER.info(f"- epoch:{epoch} -")
             train_loss_avg = train_fn(
@@ -369,6 +411,34 @@ def training_loop(CFG, LOGGER):
             lr = scheduler.get_last_lr()[0]
             scheduler.step()
 
+            if len(oof_df_fold["series_date_key"].unique()) != len(
+                valid_series_df["series_date_key"].unique()
+            ):
+                raise ValueError("oof data key num is not same")
+            oof_df_fold, oof_score = get_oof_df_and_fold_score(
+                CFG,
+                LOGGER,
+                input_info_dict_list,
+                valid_predictions,
+                valid_targets,
+                valid_key_df,
+                oof_df_fold,
+                event_df,
+                fold,
+                epoch,
+            )
+            if oof_score > fold_best_score:
+                fold_best_score = oof_score
+                LOGGER.info(
+                    f"fold{fold} epoch{epoch} best score: {fold_best_score:.4f}"
+                )
+                model_path = os.path.join(CFG.exp_dir, f"fold{fold}_best_model.pth")
+                torch.save(model.state_dict(), model_path)
+                oof_df_fold_path = os.path.join(
+                    oof_dir, f"fold{fold}_best_oof_df.parquet"
+                )
+                oof_df_fold.to_parquet(oof_df_fold_path)
+
             elapsed = int(time.time() - start_time) / 60
             log_str = f"FOLD:{fold}, Epoch:{epoch}"
             log_str += f", train:{train_loss_avg:.4f}, valid:{valid_loss_avg:.4f}"
@@ -378,15 +448,13 @@ def training_loop(CFG, LOGGER):
             wandb_log_dict[f"train_loss/fold{fold}"] = train_loss_avg
             wandb_log_dict[f"valid_loss/fold{fold}"] = valid_loss_avg
             wandb_log_dict[f"lr/fold{fold}"] = lr
+            wandb_log_dict[f"oof_score/fold{fold}"] = oof_score
             wandb_logger.log_progress(epoch, wandb_log_dict)
 
         # model save
         model_path = os.path.join(CFG.exp_dir, f"fold{fold}_model.pth")
         torch.save(model.state_dict(), model_path)
-        if len(oof_df_fold["series_date_key"].unique()) != len(
-            valid_series_df["series_date_key"].unique()
-        ):
-            raise ValueError("oof data key num is not same")
+        best_score_list.append(fold_best_score)
         del (
             model,
             train_loader,
@@ -397,67 +465,9 @@ def training_loop(CFG, LOGGER):
         )
         gc.collect()
         torch.cuda.empty_cache()
-        LOGGER.info(f"fold{fold} model saved.")
-        if "downsample" in CFG.model_type:
-            oof_df_fold = get_downsample_oof_df(
-                input_info_dict_list,
-                valid_predictions,
-                valid_targets,
-                oof_df_fold,
-                CFG,
-            )
-        else:
-            oof_df_fold = get_oof_df(
-                input_info_dict_list,
-                valid_predictions,
-                valid_targets,
-                oof_df_fold,
-                CFG,
-            )
-        oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
-        os.makedirs(oof_dir, exist_ok=True)
-        oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
-        print("save oof_df to ", oof_df_fold_path)
-        oof_df_fold.to_parquet(oof_df_fold_path)
-        LOGGER.info(f"fold{fold} oof_df created.")
-        if "downsample" in CFG.model_type:
-            oof_df_fold = detect_event_from_downsample_classpred(oof_df_fold)
-        else:
-            oof_df_fold = detect_event_from_classpred(oof_df_fold)
-        oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
-        os.makedirs(oof_dir, exist_ok=True)
-        oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
-        print("save oof_df to ", oof_df_fold_path)
-        oof_df_fold.to_parquet(oof_df_fold_path)
-        LOGGER.info(f"fold{fold} event detected.")
-        oof_scoring_df = make_submission_df(oof_df_fold)
-        LOGGER.info(f"fold{fold} submission df created.")
-        del oof_df_fold
-        gc.collect()
-
-        event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
-        event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
-        oof_score = score(event_df_fold, oof_scoring_df)
-        oof_score_list.append(oof_score)
-        LOGGER.info(f"fold{fold} oof score: {oof_score:.4f}")
-        # oof_df_fold_path = os.path.join(CFG.exp_dir, f"oof_df_fold{fold}.parquet")
-
-        wandb_logger.log_oofscore(fold, oof_score)
-    # oof_df = detect_event_from_classpred(oof_df)
-    # oof_scoring_df = make_submission_df(oof_df)
-    # event_df = event_df[event_df["series_id"].isin(oof_scoring_df["series_id"])]
-    # event_df = event_df[event_df["step"].notnull()]
-    # oof_score = score(event_df, oof_scoring_df)
-    # LOGGER.info(f"overall oof score: {oof_score:.4f}")
-    # wandb_logger.log_overall_oofscore(oof_score)
-    over_all_score_mean = np.mean(oof_score_list)
+    over_all_score_mean = np.mean(best_score_list)
     LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
     wandb_logger.log_overall_oofscore(over_all_score_mean)
-    # oof_df_path = os.path.join(CFG.exp_dir, "oof_df.parquet")
-    # print("save oof_df to ", oof_df_path)
-    # oof_df.to_parquet(oof_df_path)
-    # print("oof_df saved. finish exp.")
-    # return oof_df
 
 
 if __name__ == "__main__":
@@ -526,4 +536,4 @@ if __name__ == "__main__":
 
     LOGGER = init_logger(log_file=os.path.join(CFG.OUTPUT_DIR, "check.log"))
     LOGGER.info(f"using device: {CFG.device}")
-    training_loop(CFG, LOGGER)
+    training_loop_earlysave(CFG, LOGGER)

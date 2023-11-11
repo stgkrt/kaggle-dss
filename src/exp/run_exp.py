@@ -7,7 +7,7 @@ from eventclass_training_loop import eventclass_training_loop
 from eventdet_training_loop import eventdet_training_loop
 from pseudo_training_loop import pseudo_training_loop
 from training_loop import seed_everything
-from training_loop import training_loop
+from training_loop_earlysave import training_loop_earlysave as training_loop
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from logger import init_logger
