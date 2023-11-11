@@ -90,9 +90,10 @@ epoch=10
 #                         --model_type input_target_downsample_dt \
 #                         --lr 0.001
 
-df="/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
-python src/exp/run_exp.py --exp_category baseline \
-                        --exp_name exp020_dense_chh_epoch${epoch} \
+df="/kaggle/input/targetdownsample_train_series_skffold.parquet"
+# df="/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
+python src/exp/run_exp.py --exp_category earlysave \
+                        --exp_name exp020_dense_chh_skffold_epoch${epoch} \
                         --folds 0 1 2 3 4 \
                         --n_epoch $epoch \
                         --T_0 $epoch \

@@ -75,11 +75,11 @@
 #                         --model_type input_target_downsample \
 #                         --lr 0.001
 
-df="/kaggle/input/targetdownsample_train_series_hour_fold.parquet"
+df="/kaggle/input/targetdownsample_train_series_skffold.parquet"
 python src/exp/run_exp.py --exp_name debug \
                         --folds 0 \
-                        --n_epoch 1 \
-                        --T_0 1 \
+                        --n_epoch 2 \
+                        --T_0 2 \
                         --series_df $df \
                         --input_channels 6 \
                         --model_type input_target_downsample_dense \
