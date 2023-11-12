@@ -154,7 +154,17 @@ def get_oof_df(
     config,
 ) -> pd.DataFrame:
     start_time = time.time()
+    if "class_pred" in oof_df_fold.columns:
+        oof_df_fold = oof_df_fold.drop(["class_pred"], axis=1)
+    if "class_target" in oof_df_fold.columns:
+        oof_df_fold = oof_df_fold.drop(["class_target"], axis=1)
     print("creating oof_df", end=" ... ")
+    class_pred_list, class_target_list, steps_list, series_date_key_list = (
+        [],
+        [],
+        [],
+        [],
+    )
     for idx, (series_date_key, start_step, end_step) in enumerate(
         zip(
             valid_input_info_dict["series_date_key"],
@@ -165,14 +175,14 @@ def get_oof_df(
         # preds targets shape: [batch, ch, data_length]
         class_pred = valid_preds_dict["class_preds"][idx]
         class_target = valid_targets_dict["class_targets"][idx]
-        data_condition = (
-            (oof_df_fold["series_date_key"] == series_date_key)
-            & (start_step <= oof_df_fold["step"])
-            & (oof_df_fold["step"] <= end_step + 1)
-        )
+        # data_condition = (
+        #     (oof_df_fold["series_date_key"] == series_date_key)
+        #     & (start_step <= oof_df_fold["step"])
+        #     & (oof_df_fold["step"] <= end_step + 1)
+        # )
         # series_date_data_num = len((oof_df_fold[data_condition]))
         # steps = range(start_step, end_step + 1, 1)
-        steps = range(start_step, end_step, 1)
+        steps = range(start_step, end_step + 1, 1)
         series_date_data_num = len(steps)
         if series_date_data_num < len(class_pred[0]):
             class_pred = class_pred[0, :series_date_data_num]
@@ -195,9 +205,29 @@ def get_oof_df(
             print("len(class_target)", len(class_target))
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
-        oof_df_fold.loc[data_condition, "class_pred"] = class_pred
-        oof_df_fold.loc[data_condition, "class_target"] = class_target
-
+        class_pred_list.extend(class_pred)
+        class_target_list.extend(class_target)
+        steps_list.extend(steps)
+        series_date_key_list.extend([series_date_key] * len(steps))
+    oof_pred_target_df = pd.DataFrame(
+        {
+            "series_date_key": series_date_key_list,
+            "step": steps_list,
+            "class_pred": class_pred_list,
+            "class_target": class_target_list,
+        }
+    )
+    # oof_df_fold.loc[data_condition, "class_pred"] = class_pred
+    # oof_df_fold.loc[data_condition, "class_target"] = class_target
+    merge_start_time = time.time()
+    print("merging oof_df")
+    oof_df_fold = pd.merge(
+        oof_df_fold, oof_pred_target_df, on=["series_date_key", "step"], how="left"
+    )
+    oof_df_fold["class_pred"] = oof_df_fold["class_pred"].fillna(-1)
+    merge_elapsed = int(time.time() - merge_start_time) / 60
+    print("merge elapsed time: {:.2f} min".format(merge_elapsed))
+    elapsed = int(time.time() - start_time) / 60
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
     return oof_df_fold
@@ -333,6 +363,14 @@ def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
 
 def training_loop_earlysave(CFG, LOGGER):
     # key_df = pd.read_csv(CFG.key_df)
+    not_train_series_ids = [
+        "60d31b0bec3b",
+        "f56824b503a0",
+        "4feda0596965",
+        "e4500e7e19e1",
+    ]
+    LOGGER.info("not train series ids")
+    LOGGER.info(not_train_series_ids)
     LOGGER.info("loading series_df")
     series_df = pd.read_parquet(CFG.series_df)
     key_df = get_key_df(series_df)
@@ -361,6 +399,9 @@ def training_loop_earlysave(CFG, LOGGER):
 
         LOGGER.info(f"fold[{fold}] loading train/valid data")
         train_series_df = series_df[series_df["fold"] != fold]
+        train_series_df = train_series_df[
+            ~train_series_df["series_id"].isin(not_train_series_ids)
+        ].reset_index(drop=True)
         train_key_df = get_key_df(train_series_df)
         valid_series_df = series_df[series_df["fold"] == fold]
         valid_key_df = get_key_df(valid_series_df)
@@ -368,20 +409,13 @@ def training_loop_earlysave(CFG, LOGGER):
         valid_key_num = len(valid_key_df)
         LOGGER.info(f"fold[{fold}] train data key num: {train_key_num}")
         LOGGER.info(f"fold[{fold}] valid data key num: {valid_key_num}")
-        if train_key_num + valid_key_num != len(key_df):
-            raise ValueError("train/valid data key num is not same")
+        # if train_key_num + valid_key_num != len(key_df):
+        #     raise ValueError("train/valid data key num is not same")
         train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
         valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
         LOGGER.info(f"fold[{fold}] get_loader finished")
 
         oof_df_fold = valid_series_df.copy()
-        init_cols = [
-            "class_pred",
-            "class_target",
-        ]
-        oof_df_fold = oof_df_fold.assign(
-            **{col: -1 * np.ones(len(oof_df_fold)) for col in init_cols}
-        )
         fold_best_score = 0.0
         for epoch in range(0, CFG.n_epoch):
             LOGGER.info(f"- epoch:{epoch} -")
