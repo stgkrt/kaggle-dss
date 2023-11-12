@@ -250,20 +250,8 @@ class DSSUTimeModel(nn.Module):
             # nn.Softmax(dim=1),
             nn.Sigmoid(),
         )
-        # if hasattr(config, "ave_kernel_size"):
-        #     ave_kernel_size = config.ave_kernel_size
-        # else:
-        #     ave_kernel_size = 301  # 300で5minぐらい？1800は30minぐらい？
-        # ave_stride = 1
-        # ave_padding = int((ave_kernel_size - ave_stride) / 2)
-        # self.class_avg_pool = nn.AvgPool1d(
-        #     kernel_size=ave_kernel_size,
-        #     stride=ave_stride,
-        #     padding=ave_padding,
-        # )
 
     def _get_skip_connections_length(self):
-        # return [20, 125, 1000, 10000]
         return [36, 216, 1728, 17280]
 
     def forward(self, x):
@@ -271,7 +259,128 @@ class DSSUTimeModel(nn.Module):
         x = self.neck_conv(x)
         x = self.decoder(x, skip_connetctions)
         class_output = self.head(x)
-        # class_output = self.class_avg_pool(class_output)
+        return class_output
+
+
+# 1DCNNのエンコーダモデル
+class DenseEncoder(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 1,
+        embedding_base_channel: int = 16,
+    ) -> None:
+        super().__init__()
+        self.skip_conv = nn.Sequential(
+            nn.Conv1d(
+                input_channels,
+                embedding_base_channel,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm1d(embedding_base_channel),
+            nn.ReLU(),
+        )
+
+        self.dense_conv = nn.ModuleList()
+        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        input_channels,
+                        embedding_base_channel,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(embedding_base_channel),
+                    nn.ReLU(),
+                )
+            )
+        self.conv1 = nn.Conv1d(
+            embedding_base_channel * len(self.dense_conv_kernel_size_list),
+            embedding_base_channel,
+            kernel_size=1,
+            stride=1,
+        )
+        self.encoder_blocks = nn.Sequential(
+            EncoderBlock(
+                embedding_base_channel,
+                embedding_base_channel * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderBlock(
+                embedding_base_channel * 2,
+                embedding_base_channel * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            EncoderBlock(
+                embedding_base_channel * 4,
+                embedding_base_channel * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        skip_connections = [self.skip_conv(x)]
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = self.conv1(x)
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
+class DSSUTimeDenseModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseEncoder(
+            config.input_channels, config.embedding_base_channels
+        )
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                config.class_output_channels,
+                kernel_size=3,
+                padding="same",
+            ),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
         return class_output
 
 
@@ -976,6 +1085,67 @@ class DSSUTimeDenseTDModel(nn.Module):
         return class_output
 
 
+class DetectHead(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,  # 12を入れてもいいかも
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                1,
+                kernel_size=1,
+                stride=1,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        x = self.head(x)
+        return x
+
+
+class DSSUTimeDense2chModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseEncoder(
+            config.input_channels, config.embedding_base_channels
+        )
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head_class = DetectHead(config)
+        self.head_detect = DetectHead(config)
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head_class(x)
+        detect_output = self.head_detect(x)
+        x = torch.cat([class_output, detect_output], dim=1)
+        return x
+
+
 def get_model(config):
     print("model type = ", config.model_type)
     if config.model_type == "event_output":
@@ -996,6 +1166,10 @@ def get_model(config):
         model = DSSUTimeTDModel(config)
     elif config.model_type == "input_target_downsample_dense":
         model = DSSUTimeDenseTDModel(config)
+    elif config.model_type == "dense":
+        model = DSSUTimeDenseModel(config)
+    elif config.model_type == "dense2ch":
+        model = DSSUTimeDense2chModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -1004,7 +1178,7 @@ def get_model(config):
 if __name__ == "__main__":
 
     class config:
-        model_type = "input_target_downsample_dense"
+        model_type = "dense2ch"
         input_channels = 6
         embedding_base_channels = 16
         class_output_channels = 1
@@ -1027,3 +1201,7 @@ if __name__ == "__main__":
     model = get_model(config)
     output = model(x)
     print("output shape", output.shape)
+    # model = DenseEncoder(config.input_channels, config.embedding_base_channels)
+    # output, skip_connections = model(x)
+    # print("output shape", output.shape)
+    # print("skip_connections shape", [s.shape for s in skip_connections])
