@@ -3,6 +3,7 @@ import os
 import sys
 
 import torch
+from detectclass_training_loop_earlysave import detectclass_training_loop
 from eventclass_training_loop import eventclass_training_loop
 from eventdet_training_loop import eventdet_training_loop
 from pseudo_training_loop import pseudo_training_loop
@@ -154,6 +155,8 @@ if __name__ == "__main__":
             eventdet_training_loop(config, logger)
         elif config.model_type == "input_target_downsample_3ch":
             eventclass_training_loop(config, logger)
+        elif config.model_type == "dense2ch":
+            detectclass_training_loop(config, logger)
         else:
             training_loop(config, logger)
     elif config.train_mode == "pseudo":
