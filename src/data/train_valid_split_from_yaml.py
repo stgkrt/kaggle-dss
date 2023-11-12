@@ -25,8 +25,8 @@ if __name__ == "__main__":
         n_folds = 5
         group_key = "series_id"
 
-        filename = "/kaggle/input/targetdownsample_train_series_hour.parquet"
-        output_filename = "/kaggle/input/targetdownsample_train_series_skffold.parquet"
+        filename = "/kaggle/input/train_series_alldata.parquet"
+        output_filename = "/kaggle/input/train_series_alldata_fold.parquet"
         fold_yamls = [
             f"/kaggle/input/fold_split_yaml/stfk_event_count_bins105_fold{i}.yaml"
             for i in range(n_folds)
