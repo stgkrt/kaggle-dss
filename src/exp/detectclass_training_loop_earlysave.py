@@ -395,16 +395,13 @@ def detectclass_training_loop(CFG, LOGGER):
             )
             if oof_score > fold_best_score:
                 fold_best_score = oof_score
-                LOGGER.info(
-                    f"fold{fold} epoch{epoch} best score: {fold_best_score:.4f}"
-                )
                 model_path = os.path.join(CFG.exp_dir, f"fold{fold}_best_model.pth")
                 torch.save(model.state_dict(), model_path)
                 oof_df_fold_path = os.path.join(
                     oof_dir, f"fold{fold}_best_oof_df.parquet"
                 )
                 oof_df_fold.to_parquet(oof_df_fold_path)
-
+            LOGGER.info(f"fold{fold} epoch{epoch} best score: {fold_best_score:.4f}")
             elapsed = int(time.time() - start_time) / 60
             log_str = f"FOLD:{fold}, Epoch:{epoch}"
             log_str += f", train:{train_loss_avg:.4f}, valid:{valid_loss_avg:.4f}"
@@ -431,6 +428,7 @@ def detectclass_training_loop(CFG, LOGGER):
         )
         gc.collect()
         torch.cuda.empty_cache()
+    print("best_score_list", best_score_list)
     over_all_score_mean = np.mean(best_score_list)
     LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
     wandb_logger.log_overall_oofscore(over_all_score_mean)
