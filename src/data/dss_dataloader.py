@@ -1402,6 +1402,8 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "dense2ch":
             dataset = DSSDense2chDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "dense_lstm":
+            dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
     if mode == "train" or mode == "pseudo":
@@ -1428,7 +1430,7 @@ if __name__ == "__main__":
         batch_size = 2
         mode = "train"
         # mode = "test"
-        model_type = "dense2ch"
+        model_type = "dense_lstm"
 
     # series_df = pd.read_parquet(
     #     "/kaggle/input/targetdownsample_train_series_hour_fold.parquet"

@@ -337,12 +337,170 @@ class DenseEncoder(nn.Module):
         return x, skip_connections
 
 
+class LSTMFeatureExtractor(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=config.input_channels,
+            hidden_size=config.embedding_base_channels,
+            num_layers=config.lstm_num_layers,
+            bidirectional=True,
+            batch_first=True,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass
+
+        Args:
+            x (torch.Tensor): (batch_size, in_channels, time_steps)
+
+        Returns:
+            torch.Tensor: (batch_size, out_chans, height, time_steps)
+        """
+        # lstm input shape: (batch_size, seq_len, input_size)
+        x = x.transpose(1, 2)
+        x, _ = self.lstm(x)
+        x = x.transpose(1, 2)
+        return x
+
+
+# 1DCNNのエンコーダモデル
+class DenseLSTMEncoder(nn.Module):
+    def __init__(
+        self,
+        config,
+    ) -> None:
+        super().__init__()
+        self.skip_conv = nn.Sequential(
+            nn.Conv1d(
+                config.input_channels,
+                config.embedding_base_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels),
+            nn.ReLU(),
+        )
+
+        self.dense_conv = nn.ModuleList()
+        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        config.input_channels,
+                        config.embedding_base_channels,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(config.embedding_base_channels),
+                    nn.ReLU(),
+                )
+            )
+        self.lstm = nn.Sequential(
+            LSTMFeatureExtractor(config),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels,
+                kernel_size=12,
+                stride=12,
+            ),
+        )
+        self.conv1 = nn.Conv1d(
+            config.embedding_base_channels
+            * (len(self.dense_conv_kernel_size_list) + 1),
+            config.embedding_base_channels,
+            kernel_size=1,
+            stride=1,
+        )
+        self.encoder_blocks = nn.Sequential(
+            EncoderBlock(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderBlock(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            EncoderBlock(
+                config.embedding_base_channels * 4,
+                config.embedding_base_channels * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        lstm_emb = self.lstm(x)
+        skip_connections = [self.skip_conv(x)]
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = torch.cat([x, lstm_emb], dim=1)
+        x = self.conv1(x)
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
 class DSSUTimeDenseModel(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
         self.encoder = DenseEncoder(
-            config.input_channels, config.embedding_base_channels
+            config, config.input_channels, config.embedding_base_channels
         )
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                config.class_output_channels,
+                kernel_size=3,
+                padding="same",
+            ),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
+class DSSUTimeDenseLSTMModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMEncoder(config)
         self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
         skip_connections_length = self._get_skip_connections_length()
         self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
@@ -1170,6 +1328,8 @@ def get_model(config):
         model = DSSUTimeDenseModel(config)
     elif config.model_type == "dense2ch":
         model = DSSUTimeDense2chModel(config)
+    elif config.model_type == "dense_lstm":
+        model = DSSUTimeDenseLSTMModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -1178,11 +1338,12 @@ def get_model(config):
 if __name__ == "__main__":
 
     class config:
-        model_type = "dense2ch"
+        model_type = "dense_lstm"
         input_channels = 6
         embedding_base_channels = 16
         class_output_channels = 1
         output_channels = 2
+        lstm_num_layers = 2
         ave_kernel_size = 301
         maxpool_kernel_size = 11
         batch_size = 32
@@ -1201,7 +1362,8 @@ if __name__ == "__main__":
     model = get_model(config)
     output = model(x)
     print("output shape", output.shape)
-    # model = DenseEncoder(config.input_channels, config.embedding_base_channels)
+
+    # model = DenseLSTMEncoder(config.input_channels, config.embedding_base_channels)
     # output, skip_connections = model(x)
     # print("output shape", output.shape)
     # print("skip_connections shape", [s.shape for s in skip_connections])

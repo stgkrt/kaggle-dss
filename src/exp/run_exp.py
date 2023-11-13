@@ -110,6 +110,7 @@ def parse_args():
     parser.add_argument("--event_output_channels", type=int, default=2)
     parser.add_argument("--output_channels", type=int, default=2)
     parser.add_argument("--embedding_base_channels", type=int, default=16)
+    parser.add_argument("--lstm-num-layers", type=int, default=2)
     parser.add_argument("--ave-kernel-size", type=int, default=301)
     parser.add_argument("--maxpool-kernel-size", type=int, default=11)
     parser.add_argument("--pseudo_weight_exp", type=str, default="exp003")
