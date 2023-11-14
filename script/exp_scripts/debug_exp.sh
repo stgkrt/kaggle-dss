@@ -5,6 +5,6 @@ python src/exp/run_exp.py --exp_name debug \
                         --T_0 2 \
                         --series_df $df \
                         --input_channels 6 \
-                        --model_type dense2ch \
+                        --model_type dense_lstm_enc_head \
                         --lr 0.001
                                     
