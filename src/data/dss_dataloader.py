@@ -1404,6 +1404,8 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
             dataset = DSSDense2chDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "dense_lstm":
             dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "dense_lstm_enc_head":
+            dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
     if mode == "train" or mode == "pseudo":
