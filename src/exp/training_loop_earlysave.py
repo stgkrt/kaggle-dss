@@ -371,6 +371,10 @@ def training_loop_earlysave(CFG, LOGGER):
     ]
     LOGGER.info("not train series ids")
     LOGGER.info(not_train_series_ids)
+    remove_keys = np.load("/kaggle/working/remove_keys.npy")
+    LOGGER.info("remove keys")
+    LOGGER.info(remove_keys)
+    LOGGER.info("remove keys num: {}".format(len(remove_keys)))
     LOGGER.info("loading series_df")
     series_df = pd.read_parquet(CFG.series_df)
     key_df = get_key_df(series_df)
@@ -402,8 +406,14 @@ def training_loop_earlysave(CFG, LOGGER):
         train_series_df = train_series_df[
             ~train_series_df["series_id"].isin(not_train_series_ids)
         ].reset_index(drop=True)
+        train_series_df = train_series_df[
+            ~train_series_df["series_date_key"].isin(remove_keys)
+        ].reset_index(drop=True)
         train_key_df = get_key_df(train_series_df)
         valid_series_df = series_df[series_df["fold"] == fold]
+        valid_series_df = valid_series_df[
+            ~valid_series_df["series_date_key"].isin(remove_keys)
+        ].reset_index(drop=True)
         valid_key_df = get_key_df(valid_series_df)
         train_key_num = len(train_key_df)
         valid_key_num = len(valid_key_df)
