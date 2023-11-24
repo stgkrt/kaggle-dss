@@ -4,6 +4,54 @@ import torch
 import torch.nn as nn
 
 
+class se_block(nn.Module):
+    def __init__(self, in_layer, out_layer):
+        super(se_block, self).__init__()
+
+        self.conv1 = nn.Conv1d(in_layer, out_layer // 8, kernel_size=1, padding=0)
+        self.conv2 = nn.Conv1d(out_layer // 8, in_layer, kernel_size=1, padding=0)
+        self.fc = nn.Linear(1, out_layer // 8)
+        self.fc2 = nn.Linear(out_layer // 8, out_layer)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x_se = nn.functional.adaptive_avg_pool1d(x, 1)
+        x_se = self.conv1(x_se)
+        x_se = self.relu(x_se)
+        x_se = self.conv2(x_se)
+        x_se = self.sigmoid(x_se)
+        x_out = torch.add(x, x_se)
+        return x_out
+
+
+class LSTMFeatureExtractor(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=config.input_channels,
+            hidden_size=config.embedding_base_channels,
+            num_layers=config.lstm_num_layers,
+            bidirectional=True,
+            batch_first=True,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass
+
+        Args:
+            x (torch.Tensor): (batch_size, in_channels, time_steps)
+
+        Returns:
+            torch.Tensor: (batch_size, out_chans, height, time_steps)
+        """
+        # lstm input shape: (batch_size, seq_len, input_size)
+        x = x.transpose(1, 2)
+        x, _ = self.lstm(x)
+        x = x.transpose(1, 2)
+        return x
+
+
 class EncoderBlock(nn.Module):
     def __init__(
         self,
@@ -35,6 +83,52 @@ class EncoderBlock(nn.Module):
         x = self.bn2(x)
         x = self.relu2(x)
         pooled = self.maxpool(x)
+        return x, pooled
+
+
+class EncoderSEBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 16,
+        out_channels: int = 32,
+        conv_kernel_size: int = 5,
+        conv_padding: str = "same",
+        pool_kernel_size: int = 10,
+        pool_stride: int = 10,
+    ) -> None:
+        super().__init__()
+        self.conv = nn.Conv1d(
+            in_channels, out_channels, conv_kernel_size, padding=conv_padding
+        )
+        self.bn = nn.BatchNorm1d(out_channels)
+        self.relu = nn.ReLU()
+        self.conv1 = nn.Conv1d(
+            out_channels, out_channels, conv_kernel_size, padding=conv_padding
+        )
+        self.bn1 = nn.BatchNorm1d(out_channels)
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv1d(
+            out_channels, out_channels, conv_kernel_size, padding=conv_padding
+        )
+        self.bn2 = nn.BatchNorm1d(out_channels)
+        self.relu2 = nn.ReLU()
+        self.se = se_block(out_channels, out_channels)
+        self.maxpool = nn.MaxPool1d(kernel_size=pool_kernel_size, stride=pool_stride)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        x_se = self.conv1(x)
+        x_se = self.bn1(x_se)
+        x_se = self.relu1(x_se)
+        x_se = self.conv2(x_se)
+        x_se = self.bn2(x_se)
+        x_se = self.relu2(x_se)
+        x_se = self.se(x_se)
+        x = torch.add(x, x_se)
+
+        pooled = self.maxpool(x_se)
         return x, pooled
 
 
@@ -75,6 +169,343 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         skip_connections = []
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
+# 1DCNNのエンコーダモデル
+class DenseEncoder(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 1,
+        embedding_base_channel: int = 16,
+    ) -> None:
+        super().__init__()
+        self.skip_conv = nn.Sequential(
+            nn.Conv1d(
+                input_channels,
+                embedding_base_channel,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm1d(embedding_base_channel),
+            nn.ReLU(),
+        )
+
+        self.dense_conv = nn.ModuleList()
+        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        input_channels,
+                        embedding_base_channel,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(embedding_base_channel),
+                    nn.ReLU(),
+                )
+            )
+        self.conv1 = nn.Conv1d(
+            embedding_base_channel * len(self.dense_conv_kernel_size_list),
+            embedding_base_channel,
+            kernel_size=1,
+            stride=1,
+        )
+        self.encoder_blocks = nn.Sequential(
+            EncoderBlock(
+                embedding_base_channel,
+                embedding_base_channel * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderBlock(
+                embedding_base_channel * 2,
+                embedding_base_channel * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            EncoderBlock(
+                embedding_base_channel * 4,
+                embedding_base_channel * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        skip_connections = [self.skip_conv(x)]
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = self.conv1(x)
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
+# 1DCNNのエンコーダモデル
+class DenseLSTMEncoder(nn.Module):
+    def __init__(
+        self,
+        config,
+    ) -> None:
+        super().__init__()
+        self.skip_conv = nn.Sequential(
+            nn.Conv1d(
+                config.input_channels,
+                config.embedding_base_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels),
+            nn.ReLU(),
+        )
+
+        self.dense_conv = nn.ModuleList()
+        # self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        self.dense_conv_kernel_size_list = config.enc_kernelsize_list
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        config.input_channels,
+                        config.embedding_base_channels,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(config.embedding_base_channels),
+                    nn.ReLU(),
+                )
+            )
+        self.lstm = nn.Sequential(
+            LSTMFeatureExtractor(config),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels,
+                kernel_size=12,
+                stride=12,
+            ),
+        )
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels
+                * (len(self.dense_conv_kernel_size_list) + 1),
+                config.embedding_base_channels,
+                kernel_size=1,
+                stride=1,
+            ),
+        )
+        self.encoder_blocks = nn.Sequential(
+            EncoderBlock(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderBlock(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            EncoderBlock(
+                config.embedding_base_channels * 4,
+                config.embedding_base_channels * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        lstm_emb = self.lstm(x)
+        skip_connections = [self.skip_conv(x)]
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = torch.cat([x, lstm_emb], dim=1)
+        x = self.conv1(x)
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
+# 1DCNNのエンコーダモデル
+class DenseSELSTMEncoder(nn.Module):
+    def __init__(
+        self,
+        config,
+    ) -> None:
+        super().__init__()
+        self.skip_conv = nn.Sequential(
+            nn.Conv1d(
+                config.input_channels,
+                config.embedding_base_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels),
+            nn.ReLU(),
+        )
+
+        self.dense_conv = nn.ModuleList()
+        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        config.input_channels,
+                        config.embedding_base_channels,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(config.embedding_base_channels),
+                    nn.ReLU(),
+                )
+            )
+        self.lstm = nn.Sequential(
+            LSTMFeatureExtractor(config),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels,
+                kernel_size=12,
+                stride=12,
+            ),
+        )
+        self.conv1 = nn.Conv1d(
+            config.embedding_base_channels
+            * (len(self.dense_conv_kernel_size_list) + 1),
+            config.embedding_base_channels,
+            kernel_size=1,
+            stride=1,
+        )
+        self.encoder_blocks = nn.Sequential(
+            EncoderSEBlock(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderSEBlock(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            EncoderSEBlock(
+                config.embedding_base_channels * 4,
+                config.embedding_base_channels * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        lstm_emb = self.lstm(x)
+        skip_connections = [self.skip_conv(x)]
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = torch.cat([x, lstm_emb], dim=1)
+        x = self.conv1(x)
+        for encoder_block in self.encoder_blocks:
+            skip_connection, x = encoder_block(x)
+            skip_connections.append(skip_connection)
+        return x, skip_connections
+
+
+class DenseLSTMTrsEncoder(nn.Module):
+    def __init__(
+        self,
+        config,
+    ) -> None:
+        super().__init__()
+        self.skip_conv = nn.Sequential(
+            nn.Conv1d(
+                config.input_channels,
+                config.embedding_base_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels),
+            nn.ReLU(),
+        )
+
+        self.dense_conv = nn.ModuleList()
+        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        config.input_channels,
+                        config.embedding_base_channels,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(config.embedding_base_channels),
+                    nn.ReLU(),
+                )
+            )
+        self.lstm = nn.Sequential(
+            LSTMFeatureExtractor(config),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels,
+                kernel_size=12,
+                stride=12,
+            ),
+        )
+        self.conv1 = nn.Conv1d(
+            config.embedding_base_channels
+            * (len(self.dense_conv_kernel_size_list) + 1),
+            config.embedding_base_channels,
+            kernel_size=1,
+            stride=1,
+        )
+        self.transformer = nn.TransformerEncoderLayer(1440, 8)
+        self.encoder_blocks = nn.Sequential(
+            EncoderBlock(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            EncoderBlock(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            EncoderBlock(
+                config.embedding_base_channels * 4,
+                config.embedding_base_channels * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        lstm_emb = self.lstm(x)
+        skip_connections = [self.skip_conv(x)]
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = torch.cat([x, lstm_emb], dim=1)
+        x = self.conv1(x)
+        x = self.transformer(x)
         for encoder_block in self.encoder_blocks:
             skip_connection, x = encoder_block(x)
             skip_connections.append(skip_connection)
@@ -164,6 +595,52 @@ class DecoderBlock(nn.Module):
         return x
 
 
+class DecoderTrsBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 32,
+        out_channels: int = 16,
+        conv_kernel_size: int = 5,
+        conv_padding: str = "same",
+        upsample_kernel_size: int = 10,
+        upsample_size: int = 10,
+    ) -> None:
+        super().__init__()
+        self.crop_layer = CropLayer()
+        self.upsample_conv = nn.Sequential(
+            nn.Upsample(size=upsample_size, mode="nearest"),
+            nn.Conv1d(
+                in_channels,
+                in_channels // 2,
+                conv_kernel_size,
+                padding=conv_padding,
+            ),
+            nn.BatchNorm1d(in_channels // 2),
+            nn.ReLU(),
+        )
+        self.decoder_conv = nn.Sequential(
+            nn.Conv1d(
+                in_channels, out_channels, conv_kernel_size, padding=conv_padding
+            ),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+            nn.Conv1d(
+                out_channels, out_channels, conv_kernel_size, padding=conv_padding
+            ),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+        )
+        self.transformer = nn.TransformerEncoderLayer(upsample_size, 8)
+
+    def forward(self, x, skip_connection):
+        x = self.crop_layer(x, skip_connection)
+        x = self.upsample_conv(x)
+        x = torch.cat([x, skip_connection], dim=1)
+        x = self.decoder_conv(x)
+        x = self.transformer(x)
+        return x
+
+
 class Decoder(nn.Module):
     def __init__(
         self,
@@ -187,6 +664,50 @@ class Decoder(nn.Module):
                 upsample_size=skip_connections_length[1],
             ),
             DecoderBlock(
+                input_channels * 4,
+                input_channels * 2,
+                conv_kernel_size=5,
+                upsample_kernel_size=8,
+                upsample_size=skip_connections_length[2],
+            ),
+            DecoderBlock(
+                input_channels * 2,
+                input_channels,
+                conv_kernel_size=5,
+                upsample_kernel_size=10,
+                upsample_size=skip_connections_length[3],
+            ),
+        )
+
+    def forward(self, x, skip_connections):
+        for idx, decoder_block in enumerate(self.decoder_blocks):
+            x = decoder_block(x, skip_connections[-idx - 1])
+        return x
+
+
+class DecoderTrs(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 16,
+        skip_connections_length: list = [36, 216, 1728, 17280],
+    ) -> None:
+        super().__init__()
+        self.decoder_blocks = nn.Sequential(
+            DecoderBlock(
+                input_channels * 16,
+                input_channels * 8,
+                conv_kernel_size=4,
+                upsample_kernel_size=4,
+                upsample_size=skip_connections_length[0],
+            ),
+            DecoderBlock(
+                input_channels * 8,
+                input_channels * 4,
+                conv_kernel_size=5,
+                upsample_kernel_size=5,
+                upsample_size=skip_connections_length[1],
+            ),
+            DecoderTrsBlock(
                 input_channels * 4,
                 input_channels * 2,
                 conv_kernel_size=5,
@@ -271,194 +792,6 @@ class DSSUTimeModel(nn.Module):
         x = self.decoder(x, skip_connetctions)
         class_output = self.head(x)
         return class_output
-
-
-# 1DCNNのエンコーダモデル
-class DenseEncoder(nn.Module):
-    def __init__(
-        self,
-        input_channels: int = 1,
-        embedding_base_channel: int = 16,
-    ) -> None:
-        super().__init__()
-        self.skip_conv = nn.Sequential(
-            nn.Conv1d(
-                input_channels,
-                embedding_base_channel,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.BatchNorm1d(embedding_base_channel),
-            nn.ReLU(),
-        )
-
-        self.dense_conv = nn.ModuleList()
-        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
-        for kernel_size in self.dense_conv_kernel_size_list:
-            # 全ての出力サイズが1/12になるようにpaddingを調整
-            padding_size = int((kernel_size - 1) / 2)
-            self.dense_conv.append(
-                nn.Sequential(
-                    nn.Conv1d(
-                        input_channels,
-                        embedding_base_channel,
-                        kernel_size=kernel_size,
-                        stride=12,
-                        padding=padding_size,
-                    ),
-                    nn.BatchNorm1d(embedding_base_channel),
-                    nn.ReLU(),
-                )
-            )
-        self.conv1 = nn.Conv1d(
-            embedding_base_channel * len(self.dense_conv_kernel_size_list),
-            embedding_base_channel,
-            kernel_size=1,
-            stride=1,
-        )
-        self.encoder_blocks = nn.Sequential(
-            EncoderBlock(
-                embedding_base_channel,
-                embedding_base_channel * 2,
-                pool_kernel_size=8,
-                pool_stride=8,
-            ),
-            EncoderBlock(
-                embedding_base_channel * 2,
-                embedding_base_channel * 4,
-                pool_kernel_size=6,
-                pool_stride=6,
-            ),
-            EncoderBlock(
-                embedding_base_channel * 4,
-                embedding_base_channel * 8,
-                pool_kernel_size=4,
-                pool_stride=4,
-            ),
-        )
-
-    def forward(self, x):
-        skip_connections = [self.skip_conv(x)]
-        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
-        x = self.conv1(x)
-        for encoder_block in self.encoder_blocks:
-            skip_connection, x = encoder_block(x)
-            skip_connections.append(skip_connection)
-        return x, skip_connections
-
-
-class LSTMFeatureExtractor(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.lstm = nn.LSTM(
-            input_size=config.input_channels,
-            hidden_size=config.embedding_base_channels,
-            num_layers=config.lstm_num_layers,
-            bidirectional=True,
-            batch_first=True,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass
-
-        Args:
-            x (torch.Tensor): (batch_size, in_channels, time_steps)
-
-        Returns:
-            torch.Tensor: (batch_size, out_chans, height, time_steps)
-        """
-        # lstm input shape: (batch_size, seq_len, input_size)
-        x = x.transpose(1, 2)
-        x, _ = self.lstm(x)
-        x = x.transpose(1, 2)
-        return x
-
-
-# 1DCNNのエンコーダモデル
-class DenseLSTMEncoder(nn.Module):
-    def __init__(
-        self,
-        config,
-    ) -> None:
-        super().__init__()
-        self.skip_conv = nn.Sequential(
-            nn.Conv1d(
-                config.input_channels,
-                config.embedding_base_channels,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.BatchNorm1d(config.embedding_base_channels),
-            nn.ReLU(),
-        )
-
-        self.dense_conv = nn.ModuleList()
-        self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
-        for kernel_size in self.dense_conv_kernel_size_list:
-            # 全ての出力サイズが1/12になるようにpaddingを調整
-            padding_size = int((kernel_size - 1) / 2)
-            self.dense_conv.append(
-                nn.Sequential(
-                    nn.Conv1d(
-                        config.input_channels,
-                        config.embedding_base_channels,
-                        kernel_size=kernel_size,
-                        stride=12,
-                        padding=padding_size,
-                    ),
-                    nn.BatchNorm1d(config.embedding_base_channels),
-                    nn.ReLU(),
-                )
-            )
-        self.lstm = nn.Sequential(
-            LSTMFeatureExtractor(config),
-            nn.Conv1d(
-                config.embedding_base_channels * 2,
-                config.embedding_base_channels,
-                kernel_size=12,
-                stride=12,
-            ),
-        )
-        self.conv1 = nn.Conv1d(
-            config.embedding_base_channels
-            * (len(self.dense_conv_kernel_size_list) + 1),
-            config.embedding_base_channels,
-            kernel_size=1,
-            stride=1,
-        )
-        self.encoder_blocks = nn.Sequential(
-            EncoderBlock(
-                config.embedding_base_channels,
-                config.embedding_base_channels * 2,
-                pool_kernel_size=8,
-                pool_stride=8,
-            ),
-            EncoderBlock(
-                config.embedding_base_channels * 2,
-                config.embedding_base_channels * 4,
-                pool_kernel_size=6,
-                pool_stride=6,
-            ),
-            EncoderBlock(
-                config.embedding_base_channels * 4,
-                config.embedding_base_channels * 8,
-                pool_kernel_size=4,
-                pool_stride=4,
-            ),
-        )
-
-    def forward(self, x):
-        lstm_emb = self.lstm(x)
-        skip_connections = [self.skip_conv(x)]
-        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
-        x = torch.cat([x, lstm_emb], dim=1)
-        x = self.conv1(x)
-        for encoder_block in self.encoder_blocks:
-            skip_connection, x = encoder_block(x)
-            skip_connections.append(skip_connection)
-        return x, skip_connections
 
 
 class DSSUTimeDenseModel(nn.Module):
@@ -597,6 +930,148 @@ class DSSUTimeDenseLSTMEncHeadModel(nn.Module):
         self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
         skip_connections_length = self._get_skip_connections_length()
         self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=config.class_output_channels,
+            ),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
+class DSSUTimeDenseSELSTMEncHeadModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseSELSTMEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=config.class_output_channels,
+            ),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
+class DSSUTimeDenseLSTMEncHeadTrsEncModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMTrsEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=config.class_output_channels,
+            ),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
+class DSSUTimeDenseLSTMEncHeadTrsEncDecModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMTrsEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = DecoderTrs(
+            config.embedding_base_channels, skip_connections_length
+        )
         self.head = nn.Sequential(
             nn.Conv1d(
                 config.embedding_base_channels,
@@ -1427,6 +1902,12 @@ def get_model(config):
         model = DSSUTimeDenseLSTMModel(config)
     elif config.model_type == "dense_lstm_enc_head":
         model = DSSUTimeDenseLSTMEncHeadModel(config)
+    elif config.model_type == "dense_lstm_se_enc_head":
+        model = DSSUTimeDenseSELSTMEncHeadModel(config)
+    elif config.model_type == "dense_lstm_enc_head_trs_enc":
+        model = DSSUTimeDenseLSTMEncHeadTrsEncModel(config)
+    elif config.model_type == "dense_lstm_enc_head_trs_enc_dec":
+        model = DSSUTimeDenseLSTMEncHeadTrsEncDecModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -1435,7 +1916,7 @@ def get_model(config):
 if __name__ == "__main__":
 
     class config:
-        model_type = "dense_lstm_enc_head"
+        model_type = "dense_lstm_se_enc_head"
         input_channels = 6
         embedding_base_channels = 16
         class_output_channels = 1
