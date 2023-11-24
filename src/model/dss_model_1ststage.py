@@ -39,7 +39,6 @@ class DoubleConvBlock(nn.Module):
         return x
 
 
-# 1DCNNのエンコーダモデル
 class DenseLSTM(nn.Module):
     def __init__(
         self,
@@ -144,10 +143,180 @@ class DSS1stUTimeModel(nn.Module):
                 kernel_size=1,
                 padding=0,
             ),
+            nn.BatchNorm1d(config.class_output_channels),
+            nn.ReLU(),
+            nn.Dropout(0.2),
         )
         # [batch, 1]出力のclassifier
         self.cls = nn.Sequential(
             nn.Linear(7, 1),
+            nn.Dropout(0.2),
+        )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.head(x)
+        class_output = self.cls(x.squeeze(1))
+        return class_output
+
+
+class LSTMConv(nn.Module):
+    def __init__(
+        self,
+        config,
+    ) -> None:
+        super().__init__()
+        self.lstm = nn.Sequential(
+            LSTMFeatureExtractor(config),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels,
+                kernel_size=12,
+                stride=12,
+            ),
+        )
+        self.encoder_blocks = nn.Sequential(
+            DoubleConvBlock(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                pool_kernel_size=8,
+                pool_stride=8,
+            ),
+            DoubleConvBlock(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                pool_kernel_size=6,
+                pool_stride=6,
+            ),
+            DoubleConvBlock(
+                config.embedding_base_channels * 4,
+                config.embedding_base_channels * 8,
+                pool_kernel_size=4,
+                pool_stride=4,
+            ),
+        )
+
+    def forward(self, x):
+        x = self.lstm(x)
+        x = self.encoder_blocks(x)
+        return x
+
+
+class DSS1stLSTMUTimeModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.backbone = LSTMConv(config)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels * 8,
+                config.embedding_base_channels * 8,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 8),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 8,
+                config.class_output_channels,
+                kernel_size=1,
+                padding=0,
+            ),
+            nn.BatchNorm1d(config.class_output_channels),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+        )
+        # [batch, 1]出力のclassifier
+        self.cls = nn.Sequential(
+            nn.Linear(7, 1),
+            nn.Dropout(0.2),
+        )
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.head(x)
+        class_output = self.cls(x.squeeze(1))
+        return class_output
+
+
+class DenseLSTMConv(nn.Module):
+    def __init__(
+        self,
+        config,
+    ) -> None:
+        super().__init__()
+
+        self.dense_conv = nn.ModuleList()
+        self.dense_conv_kernel_size_list = config.enc_kernelsize_list
+        for kernel_size in self.dense_conv_kernel_size_list:
+            # 全ての出力サイズが1/12になるようにpaddingを調整
+            padding_size = int((kernel_size - 1) / 2)
+            self.dense_conv.append(
+                nn.Sequential(
+                    nn.Conv1d(
+                        config.input_channels,
+                        config.embedding_base_channels,
+                        kernel_size=kernel_size,
+                        stride=12,
+                        padding=padding_size,
+                    ),
+                    nn.BatchNorm1d(config.embedding_base_channels),
+                    nn.ReLU(),
+                )
+            )
+        self.lstm = nn.Sequential(
+            LSTMFeatureExtractor(config),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels,
+                kernel_size=12,
+                stride=12,
+            ),
+        )
+        self.conv1 = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels
+                * (len(self.dense_conv_kernel_size_list) + 1),
+                config.embedding_base_channels * 16,
+                kernel_size=1,
+                stride=1,
+            ),
+        )
+
+    def forward(self, x):
+        lstm_emb = self.lstm(x)
+        x = torch.cat([conv(x) for conv in self.dense_conv], dim=1)
+        x = torch.cat([x, lstm_emb], dim=1)
+        x = self.conv1(x)
+        return x
+
+
+class DSS1stDenseLSTMUTimeModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.backbone = DenseLSTMConv(config)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels * 16,
+                config.embedding_base_channels * 8,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 8),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 8,
+                config.class_output_channels,
+                kernel_size=1,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.class_output_channels),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+        )
+        # [batch, 1]出力のclassifier
+        self.cls = nn.Sequential(
+            nn.Linear(1440, 1),
+            nn.Dropout(0.2),
         )
 
     def forward(self, x):

@@ -39,11 +39,22 @@ class DSS1stDataset(Dataset):
     def _get_input_data(self, series_df_: pd.DataFrame) -> torch.Tensor:
         anglez = series_df_["anglez"].values
         enmo = series_df_["enmo"].values
+        # 一つ前のデータとのdiffをとる
+        # anglez_diff = np.diff(anglez)
+        # enmo_diff = np.diff(enmo)
         anglez = self._padding_data_to_same_length(anglez)
         enmo = self._padding_data_to_same_length(enmo)
+        # anglez_diff = self._padding_data_to_same_length(anglez_diff)
+        # enmo_diff = self._padding_data_to_same_length(enmo_diff)
         input_data = np.concatenate(
-            [np.expand_dims(anglez, axis=0), np.expand_dims(enmo, axis=0)]
+            [
+                np.expand_dims(anglez, axis=0),
+                np.expand_dims(enmo, axis=0),
+                # np.expand_dims(anglez_diff, axis=0),
+                # np.expand_dims(enmo_diff, axis=0),
+            ]
         )  # [channel, data_length]
+        # input_data = np.expand_dims(enmo, axis=0)
         input_data = torch.tensor(input_data, dtype=torch.float32)
         return input_data
 
@@ -101,10 +112,9 @@ def get_loader(
 
 
 if __name__ == "__main__":
-    num_workers = 0
 
     class CFG:
-        num_workers = num_workers
+        num_workers = 1
         batch_size = 16
         mode = "train"
         # mode = "test"
