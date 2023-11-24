@@ -121,12 +121,25 @@ class DSSDenseDataset(Dataset):
         input_data = torch.tensor(input_data, dtype=torch.float32)
         return input_data
 
-    def _get_target_data(self, series_df_: pd.DataFrame) -> np.ndarray:
+    def _get_target_data(self, series_df_: pd.DataFrame) -> torch.Tensor:
         target = series_df_["event"].values
         target = self._padding_data_to_same_length(target)
         target = np.expand_dims(target, axis=0)  # [channel=1, data_length]
         target = torch.tensor(target, dtype=torch.long)
         return target
+
+    def _get_flip_data(self, input_tensor: torch.Tensor, target_tensor: torch.Tensor):
+        if np.random.rand() > 0.5:
+            input_tensor = torch.flip(input_tensor, dims=[-1])
+            target_tensor = torch.flip(target_tensor, dims=[-1])
+        return input_tensor, target_tensor
+
+    def _get_roll_data(self, input_tensor: torch.Tensor, target_tensor: torch.Tensor):
+        if np.random.rand() > 0.5:
+            shit_num = np.random.randint(10, 17280 // 3)
+            input_tensor = torch.roll(input_tensor, shifts=shit_num, dims=-1)
+            target_tensor = torch.roll(target_tensor, shifts=shit_num, dims=-1)
+        return input_tensor, target_tensor
 
     def __getitem__(self, idx):
         data_key = self.key_df["series_date_key"].iloc[idx]
@@ -140,6 +153,11 @@ class DSSDenseDataset(Dataset):
         }
         if self.mode == "test":
             return input, input_info_dict
+        elif self.mode == "train":
+            target = self._get_target_data(series_data)
+            # input, target = self._get_flip_data(input, target)
+            # input, target = self._get_roll_data(input, target)
+            return input, target, input_info_dict
         else:
             target = self._get_target_data(series_data)
             return input, target, input_info_dict
@@ -1405,6 +1423,12 @@ def get_loader(CFG, key_df: pd.DataFrame, series_df: pd.DataFrame, mode: str = "
         elif CFG.model_type == "dense_lstm":
             dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
         elif CFG.model_type == "dense_lstm_enc_head":
+            dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "dense_lstm_se_enc_head":
+            dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "dense_lstm_enc_head_trs_enc":
+            dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
+        elif CFG.model_type == "dense_lstm_enc_head_trs_enc_dec":
             dataset = DSSDenseDataset(key_df, series_df, mode)  # type: ignore
         else:
             dataset = DSSDataset(key_df, series_df, mode)  # type: ignore
