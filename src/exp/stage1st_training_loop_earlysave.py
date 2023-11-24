@@ -286,7 +286,7 @@ def stage1st_training_loop_earlysave(CFG, LOGGER):
                 "class_targets": best_valid_targets["class_targets"].reshape(-1),
             }
         )
-        best_pred_df.to_csv(
+        best_pred_df.to_parquet(
             os.path.join(oof_dir, f"fold{fold}_best_pred_df.parquet")
         )
         # model save
