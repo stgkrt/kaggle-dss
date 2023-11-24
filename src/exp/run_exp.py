@@ -78,16 +78,12 @@ def parse_args():
         default=os.path.join(
             root_dir,
             "input",
-            # "preprocessed_train_series_le_fold.parquet",
-            # "preprocessed_train_series_notnull_fold.parquet",
             "preprocessed_train_series_6ch_lepseudo_fold.parquet",
-            # "preprocessed_train_series_le_50_fold.parquet",
         ),
     )
     parser.add_argument(
         "--event_df",
         type=str,
-        # default="/kaggle/input/preprocessed_train_event_notnull.parquet",
         default=os.path.join(
             root_dir,
             "input",
@@ -114,6 +110,9 @@ def parse_args():
     parser.add_argument("--ave-kernel-size", type=int, default=301)
     parser.add_argument("--maxpool-kernel-size", type=int, default=11)
     parser.add_argument("--pseudo_weight_exp", type=str, default="exp003")
+    parser.add_argument(
+        "--enc-kernelsize-list", type=int, nargs="*", default=[12, 24, 48, 96]
+    )
 
     # training setting
     parser.add_argument("--n_epoch", type=int, default=2)
