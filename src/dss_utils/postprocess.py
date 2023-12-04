@@ -5,7 +5,9 @@ import torch.nn as nn
 
 # 1step 0.5secで30minなら60*30=1800step
 # metric的にいっぱい検出してもいい？とりあえず小さめで
-def detect_event_from_classpred(df, N=300, maxpool_kernel_size=41, maxpool_stride=1):
+def detect_event_from_classpred(
+    df, N=132, maxpool_kernel_size=33, maxpool_stride=1, remove_keys=[]
+):
     df = df.copy()
 
     # series_idでgroupbyして、class_predに対して対象の列のデータから
@@ -32,6 +34,7 @@ def detect_event_from_classpred(df, N=300, maxpool_kernel_size=41, maxpool_strid
     peak_event_pred_mask = np.where(pooled_event_pred == np.abs(event_pred), 1, 0)
     peak_event_pred = event_pred * peak_event_pred_mask
     df["event_pred"] = peak_event_pred
+    # df.loc[df["series_id"].isin(remove_keys), "event_pred"] = 0
     df = df.drop(["class_pred_beforemean", "class_pred_aftermean"], axis=1)
 
     return df
@@ -41,7 +44,7 @@ def detect_event_from_downsample_classpred(
     df, N=9, maxpool_kernel_size=3, maxpool_stride=1
 ):
     df = df.copy()
-    df = df[df["second"] == 0].reset_index(drop=True)
+    # df = df[df["second"] == 0].reset_index(drop=True)
     df["class_pred_beforemean"] = df.groupby("series_id")["class_pred"].apply(
         lambda x: x.rolling(N, min_periods=1).mean()
     )

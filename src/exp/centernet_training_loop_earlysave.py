@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 import pandas as pd  # type: ignore
 import torch
+from scipy.signal import find_peaks
 
 warnings.filterwarnings("ignore")
 
@@ -25,8 +26,6 @@ from logger import WandbLogger
 from logger import init_logger
 from losses import get_class_criterion
 from postprocess import detect_event_from_classpred
-from postprocess import detect_event_from_downsample_classpred
-from postprocess import make_submission_df
 from scheduler import get_optimizer
 from scheduler import get_scheduler
 
@@ -73,16 +72,29 @@ def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER
 def get_valid_values_dict(
     class_values: torch.Tensor,
     validation_dict: dict,
-    mode: str = "preds",
+    mode: str = "pred",
 ) -> dict:
-    class_values = class_values.detach().cpu().numpy()
-    # class_values = class_values.astype(np.float16)  # type: ignore
-    if len(validation_dict[f"class_{mode}"]) == 0:
-        validation_dict[f"class_{mode}"] = class_values
-    else:
-        validation_dict[f"class_{mode}"] = np.concatenate(
-            [validation_dict[f"class_{mode}"], class_values], axis=0
-        )
+    # class_values = class_values.detach().cpu().numpy()
+    import pdb
+
+    pdb.set_trace()
+    print(class_values.keys())
+    for value_name in ["center_map", "offset", "size"]:
+        if len(validation_dict[f"{value_name}_{mode}"]) == 0:
+            print(class_values[value_name].detach().cpu().numpy()[:, 0, :].shape)
+            validation_dict[f"{value_name}_{mode}"] = (
+                class_values[value_name].detach().cpu().numpy()[:, 0, :]
+            )
+        else:
+            print(validation_dict[f"{value_name}_{mode}"].shape)
+            print(class_values[value_name].detach().cpu().numpy()[:, 0, :].shape)
+            validation_dict[f"{value_name}_{mode}"] = np.concatenate(
+                [
+                    validation_dict[f"{value_name}_{mode}"],
+                    class_values[value_name].detach().cpu().numpy()[:, 0, :],
+                ],
+                axis=0,
+            )
     return validation_dict
 
 
@@ -115,8 +127,16 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
         logger=LOGGER,
         mode="valid",
     )
-    valid_predictions = {"class_preds": np.empty(0)}
-    valid_targets = {"class_targets": np.empty(0)}
+    valid_predictions = {
+        "center_map_pred": np.empty(0),
+        "offset_pred": np.empty(0),
+        "size_pred": np.empty(0),
+    }
+    valid_targets = {
+        "center_map_target": np.empty(0),
+        "offset_target": np.empty(0),
+        "size_target": np.empty(0),
+    }
     valid_input_info = {"series_date_key": [], "start_step": [], "end_step": []}
 
     for batch_idx, (inputs, targets, input_info_dict) in enumerate(valid_loader):
@@ -128,11 +148,8 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
             loss = criterion(preds, targets)
         losses.update(loss.item(), CFG.batch_size)
         prog_loagger.log_progress(epoch, batch_idx, losses)
-
-        valid_predictions = get_valid_values_dict(
-            preds, valid_predictions, mode="preds"
-        )
-        valid_targets = get_valid_values_dict(targets, valid_targets, mode="targets")
+        valid_predictions = get_valid_values_dict(preds, valid_predictions, mode="pred")
+        valid_targets = get_valid_values_dict(targets, valid_targets, mode="target")
         valid_input_info = concat_valid_input_info(valid_input_info, input_info_dict)
 
     del inputs, preds, targets
@@ -155,11 +172,11 @@ def get_oof_df(
 ) -> pd.DataFrame:
     start_time = time.time()
     if "class_pred" in oof_df_fold.columns:
-        oof_df_fold = oof_df_fold.drop(["class_pred"], axis=1)
+        oof_df_fold = oof_df_fold.drop(["center_map_pred"], axis=1)
     if "class_target" in oof_df_fold.columns:
         oof_df_fold = oof_df_fold.drop(["class_target"], axis=1)
     print("creating oof_df", end=" ... ")
-    class_pred_list, class_target_list, steps_list, series_date_key_list = (
+    onset_pred_list, wakeup_pred_list, steps_list, series_date_key_list = (
         [],
         [],
         [],
@@ -173,52 +190,51 @@ def get_oof_df(
         )
     ):
         # preds targets shape: [batch, ch, data_length]
-        class_pred = valid_preds_dict["class_preds"][idx]
-        class_target = valid_targets_dict["class_targets"][idx]
-        # data_condition = (
-        #     (oof_df_fold["series_date_key"] == series_date_key)
-        #     & (start_step <= oof_df_fold["step"])
-        #     & (oof_df_fold["step"] <= end_step + 1)
-        # )
-        # series_date_data_num = len((oof_df_fold[data_condition]))
-        # steps = range(start_step, end_step + 1, 1)
+        center_pred = valid_preds_dict["center_map_pred"][idx]
         steps = range(start_step, end_step + 1, 1)
         series_date_data_num = len(steps)
-        if series_date_data_num < len(class_pred[0]):
-            class_pred = class_pred[0, :series_date_data_num]
-            class_target = class_target[0, :series_date_data_num]
-        elif series_date_data_num > len(class_pred[0]):
-            padding_num = series_date_data_num - len(class_pred[0])
-            class_pred = np.concatenate(
-                [class_pred[0], -1 * np.ones(padding_num)], axis=0
+        if series_date_data_num < len(center_pred[0]):
+            padding_num = series_date_data_num - len(center_pred[0])
+            center_pred = np.concatenate(
+                [center_pred[0], np.zeros(padding_num)], axis=0
             )
-            class_target = np.concatenate(
-                [class_target[0], -1 * np.ones(padding_num)], axis=0
-            )
+        elif series_date_data_num > len(center_pred[0]):
+            center_pred = center_pred[0, :series_date_data_num]
         else:
-            class_pred = class_pred[0]
-            class_target = class_target[0]
-        if not (len(class_pred) == len(class_target)) or not (
-            len(class_pred) == len(steps)
+            center_pred = center_pred[0]
+        # center_predsからtopkの値を取得
+        event_topk = config.event_topk
+        topk_center_preds = np.argsort(center_pred[0])[-event_topk:]
+        onset_preds = np.zeros(len(center_pred[0]))
+        wakeup_preds = np.zeros(len(center_pred[0]))
+        for center_pred_idx in topk_center_preds[::-1]:
+            offset_pred = valid_preds_dict["offset_pred"][idx][0][center_pred_idx]
+            size_pred = valid_preds_dict["size_pred"][idx][0][center_pred_idx]
+            onset_pred_idx = int(center_pred_idx + offset_pred - (size_pred / 2))
+            wakeup_pred_idx = int(center_pred_idx + offset_pred + (size_pred / 2))
+            if onset_pred_idx >= 0 and onset_pred_idx < len(center_pred[0]):
+                onset_preds[onset_pred_idx] = center_pred[0][center_pred_idx]
+            if wakeup_pred_idx >= 0 and wakeup_pred_idx < len(center_pred[0]):
+                wakeup_preds[wakeup_pred_idx] = center_pred[0][center_pred_idx]
+
+        if not (len(wakeup_preds) == len(onset_preds)) or not (
+            len(wakeup_preds) == len(steps)
         ):
-            print("len(class_pred)", len(class_pred))
-            print("len(class_target)", len(class_target))
+            print("len(wakeup)", len(wakeup_preds))
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
-        class_pred_list.extend(class_pred)
-        class_target_list.extend(class_target)
+        wakeup_pred_list.extend(wakeup_preds)
+        onset_pred_list.extend(onset_preds)
         steps_list.extend(steps)
         series_date_key_list.extend([series_date_key] * len(steps))
     oof_pred_target_df = pd.DataFrame(
         {
             "series_date_key": series_date_key_list,
             "step": steps_list,
-            "class_pred": class_pred_list,
-            "class_target": class_target_list,
+            "onset": onset_pred_list,
+            "wakeup": wakeup_pred_list,
         }
     )
-    # oof_df_fold.loc[data_condition, "class_pred"] = class_pred
-    # oof_df_fold.loc[data_condition, "class_target"] = class_target
     merge_start_time = time.time()
     print("merging oof_df")
     oof_df_fold = pd.merge(
@@ -228,81 +244,50 @@ def get_oof_df(
     merge_elapsed = int(time.time() - merge_start_time) / 60
     print("merge elapsed time: {:.2f} min".format(merge_elapsed))
     elapsed = int(time.time() - start_time) / 60
-    print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
-    return oof_df_fold
-
-
-def get_downsample_oof_df(
-    valid_input_info_dict: dict,
-    valid_preds_dict: dict,
-    valid_targets_dict: dict,
-    oof_df_fold: pd.DataFrame,
-    config,
-) -> pd.DataFrame:
-    start_time = time.time()
-    print("creating oof_df", end=" ... ")
-    if "class_pred" in oof_df_fold.columns:
-        oof_df_fold = oof_df_fold.drop(["class_pred"], axis=1)
-    if "class_target" in oof_df_fold.columns:
-        oof_df_fold = oof_df_fold.drop(["class_target"], axis=1)
-    series_date_key_list = []
-    class_pred_list, class_target_list, steps_list = [], [], []
-    for idx, (series_date_key, start_step, end_step) in enumerate(
-        zip(
-            valid_input_info_dict["series_date_key"],
-            valid_input_info_dict["start_step"],
-            valid_input_info_dict["end_step"],
-        )
-    ):
-        # preds targets shape: [batch, ch, data_length]
-        class_pred = valid_preds_dict["class_preds"][idx]
-        class_target = valid_targets_dict["class_targets"][idx]
-        steps = range(start_step, end_step + 1, 4)
-        series_date_data_num = len(steps)
-        if series_date_data_num < len(class_pred[0]):
-            class_pred = class_pred[0, :series_date_data_num]
-            class_target = class_target[0, :series_date_data_num]
-        elif series_date_data_num > len(class_pred[0]):
-            padding_num = series_date_data_num - len(class_pred[0])
-            class_pred = np.concatenate(
-                [class_pred[0], -1 * np.ones(padding_num)], axis=0
-            )
-            class_target = np.concatenate(
-                [class_target[0], -1 * np.ones(padding_num)], axis=0
-            )
-        else:
-            class_pred = class_pred[0]
-            class_target = class_target[0]
-        if not (len(class_pred) == len(class_target)) or not (
-            len(class_pred) == len(steps)
-        ):
-            print("len(class_pred)", len(class_pred))
-            print("len(class_target)", len(class_target))
-            print("len(steps)", len(steps))
-            raise ValueError("preds and targets length is not same")
-        class_pred_list.extend(class_pred)
-        class_target_list.extend(class_target)
-        steps_list.extend(steps)
-        series_date_key_list.extend([series_date_key] * len(steps))
-    oof_pred_target_df = pd.DataFrame(
-        {
-            "series_date_key": series_date_key_list,
-            "step": steps_list,
-            "class_pred": class_pred_list,
-            "class_target": class_target_list,
-        }
-    )
-    merge_start_time = time.time()
-    print("merging oof_df")
-    oof_df_fold = pd.merge(
-        oof_df_fold, oof_pred_target_df, on=["series_date_key", "step"], how="left"
-    )
-    oof_df_fold["class_pred"] = oof_df_fold["class_pred"].interpolate()
-    merge_elapsed = int(time.time() - merge_start_time) / 60
-    print("merge elapsed time: {:.2f} min".format(merge_elapsed))
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
     return oof_df_fold
+
+
+def post_process_for_seg(
+    # unique_series_ids: np.ndarray,
+    series_df: pd.DataFrame,
+    score_th: float,
+    distance: int,
+) -> pd.DataFrame:
+    unique_series_ids = series_df["series_id"].unique()
+    records = []
+    for series_id in unique_series_ids:
+        this_series_preds = series_df[series_df["series_id"] == series_id][
+            ["onset", "wakeup", "class_pred"]
+        ].to_numpy()
+        for i, event_name in enumerate(["onset", "wakeup"]):
+            this_event_preds = this_series_preds[:, i]
+            steps = find_peaks(this_event_preds, height=score_th, distance=distance)[0]
+            scores = this_event_preds[steps]
+
+            for step, score_ in zip(steps, scores):
+                records.append(
+                    {
+                        "series_id": series_id,
+                        "step": step,
+                        "event": event_name,
+                        "score": score_,
+                    }
+                )
+
+    if len(records) == 0:  # 一つも予測がない場合はdummyを入れる
+        records.append(
+            {
+                "series_id": series_id,
+                "step": 0,
+                "event": "onset",
+                "score": 0,
+            }
+        )
+    sub_df = pd.DataFrame(records).sort_values(["series_id", "step"])
+    sub_df = sub_df[["series_id", "step", "event", "score"]]
+    return sub_df
 
 
 def get_oof_df_and_fold_score(
@@ -316,35 +301,22 @@ def get_oof_df_and_fold_score(
     event_df,
     fold,
     epoch,
-    remove_keys=[],
 ):
-    if "downsample" in CFG.model_type:
-        oof_df_fold = get_downsample_oof_df(
-            input_info_dict_list,
-            valid_predictions,
-            valid_targets,
-            oof_df_fold,
-            CFG,
-        )
-    else:
-        oof_df_fold = get_oof_df(
-            input_info_dict_list,
-            valid_predictions,
-            valid_targets,
-            oof_df_fold,
-            CFG,
-        )
-    # oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
-    # oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
-    # print("save oof_df to ", oof_df_fold_path)
-    # oof_df_fold.to_parquet(oof_df_fold_path)
+    oof_df_fold = get_oof_df(
+        input_info_dict_list,
+        valid_predictions,
+        valid_targets,
+        oof_df_fold,
+        CFG,
+    )
+    oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
+    oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
+    print("save oof_df to ", oof_df_fold_path)
+    oof_df_fold.to_parquet(oof_df_fold_path)
     LOGGER.info(f"fold{fold} oof_df created.")
-    if "downsample" in CFG.model_type:
-        oof_df_fold = detect_event_from_downsample_classpred(oof_df_fold)
-    else:
-        oof_df_fold = detect_event_from_classpred(oof_df_fold, remove_keys=remove_keys)
+    oof_df_fold = detect_event_from_classpred(oof_df_fold)
     LOGGER.info(f"fold{fold} event detected.")
-    oof_scoring_df = make_submission_df(oof_df_fold)
+    oof_scoring_df = post_process_for_seg(oof_df_fold, score_th=0.01, distance=70)
     LOGGER.info(f"fold{fold} submission df created.")
 
     event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
@@ -364,7 +336,7 @@ def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
     return key_df
 
 
-def training_loop_earlysave(CFG, LOGGER):
+def centernet_training_loop_earlysave(CFG, LOGGER):
     # key_df = pd.read_csv(CFG.key_df)
     not_train_series_ids = [
         "60d31b0bec3b",
@@ -374,19 +346,16 @@ def training_loop_earlysave(CFG, LOGGER):
     ]
     LOGGER.info("not train series ids")
     LOGGER.info(not_train_series_ids)
-    # remove_keys = np.load("/kaggle/working/remove_keys.npy")
-    # LOGGER.info("remove keys")
-    # LOGGER.info(remove_keys)
-    # LOGGER.info("remove keys num: {}".format(len(remove_keys)))
-    # too_short_event_df = pd.read_csv("/kaggle/working/too_short_event_keys.csv")
-    # too_short_event_keys = too_short_event_df["key"].unique()
-    # LOGGER.info("too short event keys")
-    # LOGGER.info(too_short_event_keys)
-    # LOGGER.info("too short event keys num: {}".format(len(too_short_event_keys)))
-    # LOGGER.info("loading series_df")
-    # nan_event_keys = np.load("/kaggle/working/nan_event_keys.npy")
-    # LOGGER.info("nan event keys")
-    # LOGGER.info(nan_event_keys)
+    remove_keys = np.load("/kaggle/working/remove_keys.npy")
+    LOGGER.info("remove keys")
+    LOGGER.info(remove_keys)
+    LOGGER.info("remove keys num: {}".format(len(remove_keys)))
+    too_short_event_df = pd.read_csv("/kaggle/working/too_short_event_keys.csv")
+    too_short_event_keys = too_short_event_df["key"].unique()
+    LOGGER.info("too short event keys")
+    LOGGER.info(too_short_event_keys)
+    LOGGER.info("too short event keys num: {}".format(len(too_short_event_keys)))
+    LOGGER.info("loading series_df")
     series_df = pd.read_parquet(CFG.series_df)
     key_df = get_key_df(series_df)
 
@@ -415,32 +384,27 @@ def training_loop_earlysave(CFG, LOGGER):
         LOGGER.info(f"fold[{fold}] loading train/valid data")
         train_series_df = series_df[series_df["fold"] != fold]
 
-        # ラベルずれを除外
         train_series_df = train_series_df[
             ~train_series_df["series_id"].isin(not_train_series_ids)
         ].reset_index(drop=True)
         # 連日類似波形Nanデータの除外
-        # train_series_df = train_series_df[
-        #     ~train_series_df["series_date_key"].isin(remove_keys)
-        # ].reset_index(drop=True)
+        train_series_df = train_series_df[
+            ~train_series_df["series_date_key"].isin(remove_keys)
+        ].reset_index(drop=True)
         # eventが短すぎるデータの除外
-        # train_series_df = train_series_df[
-        #     ~train_series_df["series_date_key"].isin(too_short_event_keys)
-        # ].reset_index(drop=True)
-        # nan event keyの除外
-        # train_series_df = train_series_df[
-        #     ~train_series_df["series_date_key"].isin(nan_event_keys)
-        # ].reset_index(drop=True)
+        train_series_df = train_series_df[
+            ~train_series_df["series_date_key"].isin(too_short_event_keys)
+        ].reset_index(drop=True)
         train_key_df = get_key_df(train_series_df)
         valid_series_df = series_df[series_df["fold"] == fold]
         # 連日類似波形Nanデータの除外
-        # valid_series_df = valid_series_df[
-        #     ~valid_series_df["series_date_key"].isin(remove_keys)
-        # ].reset_index(drop=True)
-        # # eventが短すぎるデータの除外
-        # valid_series_df = valid_series_df[
-        #     ~valid_series_df["series_date_key"].isin(too_short_event_keys)
-        # ].reset_index(drop=True)
+        valid_series_df = valid_series_df[
+            ~valid_series_df["series_date_key"].isin(remove_keys)
+        ].reset_index(drop=True)
+        # eventが短すぎるデータの除外
+        valid_series_df = valid_series_df[
+            ~valid_series_df["series_date_key"].isin(too_short_event_keys)
+        ].reset_index(drop=True)
         valid_key_df = get_key_df(valid_series_df)
         train_key_num = len(train_key_df)
         valid_key_num = len(valid_key_df)
@@ -498,19 +462,14 @@ def training_loop_earlysave(CFG, LOGGER):
                 event_df,
                 fold,
                 epoch,
-                remove_keys=[],
             )
-            if oof_score >= fold_best_score:
+            if oof_score > fold_best_score:
                 fold_best_score = oof_score
                 model_path = os.path.join(CFG.exp_dir, f"fold{fold}_best_model.pth")
-                if os.path.exists(model_path):
-                    os.remove(model_path)
                 torch.save(model.state_dict(), model_path)
                 oof_df_fold_path = os.path.join(
                     oof_dir, f"fold{fold}_best_oof_df.parquet"
                 )
-                if os.path.exists(oof_df_fold_path):
-                    os.remove(oof_df_fold_path)
                 oof_df_fold.to_parquet(oof_df_fold_path)
             LOGGER.info(f"fold{fold} best score: {fold_best_score:.4f}")
             elapsed = int(time.time() - start_time) / 60
@@ -541,10 +500,7 @@ def training_loop_earlysave(CFG, LOGGER):
         torch.cuda.empty_cache()
     over_all_score_mean = np.mean(best_score_list)
     LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
-    wandb_logger.log_overall_oofscore(over_all_score_mean)
-    for fold, oof_score in enumerate(best_score_list):
-        LOGGER.info(f"fold{fold} best oof score: {oof_score:.4f}")
-        wandb_logger.log_best_score(fold, oof_score)
+
     wandb_logger.log_overall_oofscore(over_all_score_mean)
 
 
@@ -614,4 +570,4 @@ if __name__ == "__main__":
 
     LOGGER = init_logger(log_file=os.path.join(CFG.OUTPUT_DIR, "check.log"))
     LOGGER.info(f"using device: {CFG.device}")
-    training_loop_earlysave(CFG, LOGGER)
+    centernet_training_loop_earlysave(CFG, LOGGER)

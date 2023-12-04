@@ -84,6 +84,38 @@ class NegativeIgnoreBCELoss(nn.Module):
         return loss.mean()
 
 
+class SoftDiceLoss(nn.Module):
+    """
+    soft-dice loss, useful in binary segmentation
+    """
+
+    def __init__(self, p=1, smooth=1):
+        super(SoftDiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, outputs, targets):
+        outputs = (outputs > 0.5).float()
+        targets = (targets > 0.5).float()
+        intersection = (outputs * targets).sum()
+        union = targets.sum() + outputs.sum() - intersection
+        loss = 1.0 - ((intersection + self.smooth) / (union + self.smooth))
+        return loss
+
+
+class DiceBCELoss(nn.Module):
+    def __init__(self, eps=1e-6):
+        super(DiceBCELoss, self).__init__()
+        self.eps = eps
+        self.bce_loss = NegativeIgnoreBCELoss()
+        self.dice = SoftDiceLoss()
+
+    def forward(self, outputs, targets):
+        bce_loss = self.bce_loss(outputs, targets)
+        dice_loss = self.dice(outputs, targets)
+        loss = bce_loss + dice_loss
+        return loss
+
+
 class WeightedNegativeIgnoreBCELoss(nn.Module):
     def __init__(self, eps=1e-6):
         super(WeightedNegativeIgnoreBCELoss, self).__init__()
@@ -177,6 +209,27 @@ class PseudoNegativeIgnoreBCELoss(nn.Module):
         return loss.mean()
 
 
+class CenterNetLoss(nn.Module):
+    def __init__(self, eps=1e-6):
+        super(CenterNetLoss, self).__init__()
+        self.eps = eps
+        self.bce_loss = nn.BCEWithLogitsLoss()
+        self.l1loss = nn.L1Loss()
+
+    def forward(self, outputs, targets):
+        center_map = outputs["center_map"]
+        offset = outputs["offset"]
+        size = outputs["size"]
+        targets_center_map = targets[:, 0, :].unsqueeze(1)
+        targets_offset = targets[:, 1, :].unsqueeze(1)
+        targets_size = targets[:, 2, :].unsqueeze(1)
+        center_map_loss = self.bce_loss(center_map, targets_center_map)
+        offset_loss = self.l1loss(offset, targets_offset)
+        size_loss = self.l1loss(size, targets_size)
+        loss = center_map_loss + offset_loss + size_loss
+        return loss
+
+
 def get_class_criterion(CFG):
     if CFG.model_type == "event_detect":
         # criterion = PositiveOnlyLoss()
@@ -185,8 +238,15 @@ def get_class_criterion(CFG):
         # criterion = PositiveAroundNegativeLoss()
         # criterion = WeightedNegativeIgnoreBCELoss()
         criterion = WeightedNegativeIgnoreBCEMaxLoss()
+    elif CFG.model_type == "centernet":
+        criterion = CenterNetLoss()
+    elif CFG.model_type == "dense3ch":
+        criterion = nn.BCEWithLogitsLoss()
+    elif CFG.model_type == "dense3ch_downsample":
+        criterion = nn.BCEWithLogitsLoss()
     else:
         criterion = NegativeIgnoreBCELoss()
+        # criterion = DiceBCELoss()
     return criterion
 
 

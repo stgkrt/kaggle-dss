@@ -7,10 +7,8 @@ import warnings
 
 import numpy as np
 import pandas as pd  # type: ignore
-import polars as pl
-import scipy.signal as signal
 import torch
-from scipy.signal import find_peaks
+from torch_ema import ExponentialMovingAverage
 
 warnings.filterwarnings("ignore")
 
@@ -27,6 +25,9 @@ from logger import ProgressLogger
 from logger import WandbLogger
 from logger import init_logger
 from losses import get_class_criterion
+from postprocess import detect_event_from_classpred
+from postprocess import detect_event_from_downsample_classpred
+from postprocess import make_submission_df
 from scheduler import get_optimizer
 from scheduler import get_scheduler
 
@@ -71,25 +72,17 @@ def train_fn(CFG, epoch, model, train_loader, class_criterion, optimizer, LOGGER
 
 
 def get_valid_values_dict(
-    event_values: torch.Tensor,
+    class_values: torch.Tensor,
     validation_dict: dict,
     mode: str = "preds",
 ) -> dict:
-    event_values = event_values.detach().cpu().numpy()
-    # event_values = event_values.astype(np.float16)  # type: ignore
-    if len(validation_dict[f"onset_{mode}"]) == 0:
-        validation_dict[f"sleep_{mode}"] = event_values[:, 0, :]
-        validation_dict[f"onset_{mode}"] = event_values[:, 1, :]
-        validation_dict[f"wakeup_{mode}"] = event_values[:, 2, :]
+    class_values = class_values.detach().cpu().numpy()
+    # class_values = class_values.astype(np.float16)  # type: ignore
+    if len(validation_dict[f"class_{mode}"]) == 0:
+        validation_dict[f"class_{mode}"] = class_values
     else:
-        validation_dict[f"sleep_{mode}"] = np.concatenate(
-            [validation_dict[f"sleep_{mode}"], event_values[:, 0, :]], axis=0
-        )
-        validation_dict[f"onset_{mode}"] = np.concatenate(
-            [validation_dict[f"onset_{mode}"], event_values[:, 1, :]], axis=0
-        )
-        validation_dict[f"wakeup_{mode}"] = np.concatenate(
-            [validation_dict[f"wakeup_{mode}"], event_values[:, 2, :]], axis=0
+        validation_dict[f"class_{mode}"] = np.concatenate(
+            [validation_dict[f"class_{mode}"], class_values], axis=0
         )
     return validation_dict
 
@@ -112,7 +105,7 @@ def concat_valid_input_info(valid_input_info: dict, input_info: dict) -> dict:
     return valid_input_info
 
 
-def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
+def valid_fn(CFG, epoch, model, ema, valid_loader, criterion, LOGGER):
     model.eval()
 
     losses = AverageMeter()
@@ -123,25 +116,18 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
         logger=LOGGER,
         mode="valid",
     )
-    valid_predictions = {
-        "sleep_preds": np.empty(0),
-        "onset_preds": np.empty(0),
-        "wakeup_preds": np.empty(0),
-    }
-    valid_targets = {
-        "sleep_targets": np.empty(0),
-        "onset_targets": np.empty(0),
-        "wakeup_targets": np.empty(0),
-    }
+    valid_predictions = {"class_preds": np.empty(0)}
+    valid_targets = {"class_targets": np.empty(0)}
     valid_input_info = {"series_date_key": [], "start_step": [], "end_step": []}
 
     for batch_idx, (inputs, targets, input_info_dict) in enumerate(valid_loader):
         inputs = inputs.to(CFG.device, non_blocking=True).float()
         targets = targets.to(CFG.device, non_blocking=True).float()
-        with torch.no_grad():
+        # with torch.no_grad():
+        with ema.average_parameters():
             preds = model(inputs)
+            # preds = torch.sigmoid(preds)
             loss = criterion(preds, targets)
-            preds = torch.sigmoid(preds)
         losses.update(loss.item(), CFG.batch_size)
         prog_loagger.log_progress(epoch, batch_idx, losses)
 
@@ -162,111 +148,7 @@ def valid_fn(CFG, epoch, model, valid_loader, criterion, LOGGER):
     )
 
 
-def get_event_oof_df(
-    valid_input_info_dict: dict,
-    valid_preds_dict: dict,
-    valid_targets_dict: dict,
-    oof_df_fold: pd.DataFrame,
-) -> pd.DataFrame:
-    pred_target_col_list = [
-        "sleep_pred",
-        "onset_pred",
-        "wakeup_pred",
-        "sleep_target",
-        "onset_target",
-        "wakeup_target",
-    ]
-    drop_col_list = [col for col in pred_target_col_list if col in oof_df_fold.columns]
-    oof_df_fold = oof_df_fold.drop(drop_col_list, axis=1)
-    start_time = time.time()
-    sleep_pred_list, onset_pred_list, wakeup_pred_list = [], [], []
-    sleep_target_list, onset_target_list, wakeup_target_list = [], [], []
-    steps_list = []
-    series_date_key_list = []
-    print("creating oof_df", end=" ... ")
-    for idx, (series_date_key, start_step, end_step) in enumerate(
-        zip(
-            valid_input_info_dict["series_date_key"],
-            valid_input_info_dict["start_step"],
-            valid_input_info_dict["end_step"],
-        )
-    ):
-        # preds targets shape: [batch, ch, data_length]
-        sleep_pred = valid_preds_dict["sleep_preds"][idx]
-        onset_pred = valid_preds_dict["onset_preds"][idx]
-        wakeup_pred = valid_preds_dict["wakeup_preds"][idx]
-        sleep_target = valid_targets_dict["sleep_targets"][idx]
-        onset_target = valid_targets_dict["onset_targets"][idx]
-        wakeup_target = valid_targets_dict["wakeup_targets"][idx]
-
-        steps = range(start_step, end_step + 1, 1)
-        series_date_data_num = len(steps)
-        if series_date_data_num < onset_pred.shape[0]:
-            sleep_pred = sleep_pred[:series_date_data_num]
-            onset_pred = onset_pred[:series_date_data_num]
-            wakeup_pred = wakeup_pred[:series_date_data_num]
-            sleep_target = sleep_target[:series_date_data_num]
-            onset_target = onset_target[:series_date_data_num]
-            wakeup_target = wakeup_target[:series_date_data_num]
-        elif series_date_data_num > onset_pred.shape[0]:
-            padding_num = series_date_data_num - onset_pred.shape[0]
-            sleep_pred = np.concatenate([sleep_pred, -1 * np.ones(padding_num)], axis=0)
-            onset_pred = np.concatenate([onset_pred, -1 * np.ones(padding_num)], axis=0)
-            wakeup_pred = np.concatenate(
-                [wakeup_pred, -1 * np.ones(padding_num)], axis=0
-            )
-            sleep_target = np.concatenate(
-                [sleep_target, -1 * np.ones(padding_num)], axis=0
-            )
-            onset_target = np.concatenate(
-                [onset_target, -1 * np.ones(padding_num)], axis=0
-            )
-            wakeup_target = np.concatenate(
-                [wakeup_target, -1 * np.ones(padding_num)], axis=0
-            )
-        else:
-            pass
-        if not (onset_pred.shape[0] == onset_target.shape[0]) or not (
-            onset_pred.shape[0] == len(steps)
-        ):
-            print("len(event_pred)", onset_pred.shape[0])
-            print("len(event_target)", onset_target.shape[0])
-            print("len(steps)", len(steps))
-            raise ValueError("preds and targets length is not same")
-        sleep_pred_list.extend(sleep_pred)
-        onset_pred_list.extend(onset_pred)
-        wakeup_pred_list.extend(wakeup_pred)
-        sleep_target_list.extend(sleep_target)
-        onset_target_list.extend(onset_target)
-        wakeup_target_list.extend(wakeup_target)
-        steps_list.extend(steps)
-        series_date_key_list.extend([series_date_key] * len(steps))
-    oof_pred_target_df = pd.DataFrame(
-        {
-            "series_date_key": series_date_key_list,
-            "step": steps_list,
-            "sleep_pred": sleep_pred_list,
-            "onset_pred": onset_pred_list,
-            "wakeup_pred": wakeup_pred_list,
-            "sleep_target": sleep_target_list,
-            "onset_target": onset_target_list,
-            "wakeup_target": wakeup_target_list,
-        }
-    )
-    oof_df_fold = pd.merge(
-        oof_df_fold, oof_pred_target_df, on=["series_date_key", "step"], how="left"
-    )
-    # sleep_pred, onset_pred, wakeup_predのnanを線形補間
-    oof_df_fold["sleep_pred"] = oof_df_fold["sleep_pred"].interpolate()
-    oof_df_fold["onset_pred"] = oof_df_fold["onset_pred"].interpolate()
-    oof_df_fold["wakeup_pred"] = oof_df_fold["wakeup_pred"].interpolate()
-
-    elapsed = int(time.time() - start_time) / 60
-    print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
-    return oof_df_fold
-
-
-def get_event_downsample_oof_df(
+def get_oof_df(
     valid_input_info_dict: dict,
     valid_preds_dict: dict,
     valid_targets_dict: dict,
@@ -274,21 +156,17 @@ def get_event_downsample_oof_df(
     config,
 ) -> pd.DataFrame:
     start_time = time.time()
-    pred_target_col_list = [
-        "sleep_pred",
-        "onset_pred",
-        "wakeup_pred",
-        "sleep_target",
-        "onset_target",
-        "wakeup_target",
-    ]
-    drop_col_list = [col for col in pred_target_col_list if col in oof_df_fold.columns]
-    oof_df_fold = oof_df_fold.drop(drop_col_list, axis=1)
+    if "class_pred" in oof_df_fold.columns:
+        oof_df_fold = oof_df_fold.drop(["class_pred"], axis=1)
+    if "class_target" in oof_df_fold.columns:
+        oof_df_fold = oof_df_fold.drop(["class_target"], axis=1)
     print("creating oof_df", end=" ... ")
-    sleep_pred_list, onset_pred_list, wakeup_pred_list = [], [], []
-    sleep_target_list, onset_target_list, wakeup_target_list = [], [], []
-    steps_list = []
-    series_date_key_list = []
+    class_pred_list, class_target_list, steps_list, series_date_key_list = (
+        [],
+        [],
+        [],
+        [],
+    )
     for idx, (series_date_key, start_step, end_step) in enumerate(
         zip(
             valid_input_info_dict["series_date_key"],
@@ -297,136 +175,134 @@ def get_event_downsample_oof_df(
         )
     ):
         # preds targets shape: [batch, ch, data_length]
-        sleep_pred = valid_preds_dict["sleep_preds"][idx]
-        onset_pred = valid_preds_dict["onset_preds"][idx]
-        wakeup_pred = valid_preds_dict["wakeup_preds"][idx]
-        sleep_target = valid_targets_dict["sleep_targets"][idx]
-        onset_target = valid_targets_dict["onset_targets"][idx]
-        wakeup_target = valid_targets_dict["wakeup_targets"][idx]
-        steps = range(start_step, end_step + 1, config.downsample_rate)
+        class_pred = valid_preds_dict["class_preds"][idx]
+        class_target = valid_targets_dict["class_targets"][idx]
+        # data_condition = (
+        #     (oof_df_fold["series_date_key"] == series_date_key)
+        #     & (start_step <= oof_df_fold["step"])
+        #     & (oof_df_fold["step"] <= end_step + 1)
+        # )
+        # series_date_data_num = len((oof_df_fold[data_condition]))
+        # steps = range(start_step, end_step + 1, 1)
+        steps = range(start_step, end_step + 1, 1)
         series_date_data_num = len(steps)
-
-        if series_date_data_num < onset_pred.shape[0]:
-            sleep_pred = sleep_pred[:series_date_data_num]
-            onset_pred = onset_pred[:series_date_data_num]
-            wakeup_pred = wakeup_pred[:series_date_data_num]
-            sleep_target = sleep_target[:series_date_data_num]
-            onset_target = onset_target[:series_date_data_num]
-            wakeup_target = wakeup_target[:series_date_data_num]
-        elif series_date_data_num > onset_pred.shape[0]:
-            padding_num = series_date_data_num - onset_pred.shape[0]
-            sleep_pred = np.concatenate([sleep_pred, -1 * np.ones(padding_num)], axis=0)
-            onset_pred = np.concatenate([onset_pred, -1 * np.ones(padding_num)], axis=0)
-            wakeup_pred = np.concatenate(
-                [wakeup_pred, -1 * np.ones(padding_num)], axis=0
+        if series_date_data_num < len(class_pred[0]):
+            class_pred = class_pred[0, :series_date_data_num]
+            class_target = class_target[0, :series_date_data_num]
+        elif series_date_data_num > len(class_pred[0]):
+            padding_num = series_date_data_num - len(class_pred[0])
+            class_pred = np.concatenate(
+                [class_pred[0], -1 * np.ones(padding_num)], axis=0
             )
-            sleep_target = np.concatenate(
-                [sleep_target, -1 * np.ones(padding_num)], axis=0
-            )
-            onset_target = np.concatenate(
-                [onset_target, -1 * np.ones(padding_num)], axis=0
-            )
-            wakeup_target = np.concatenate(
-                [wakeup_target, -1 * np.ones(padding_num)], axis=0
+            class_target = np.concatenate(
+                [class_target[0], -1 * np.ones(padding_num)], axis=0
             )
         else:
-            pass
-        if not (onset_pred.shape[0] == onset_target.shape[0]) or not (
-            onset_pred.shape[0] == len(steps)
+            class_pred = class_pred[0]
+            class_target = class_target[0]
+        if not (len(class_pred) == len(class_target)) or not (
+            len(class_pred) == len(steps)
         ):
-            print("len(event_pred)", onset_pred.shape[0])
-            print("len(event_target)", onset_target.shape[0])
+            print("len(class_pred)", len(class_pred))
+            print("len(class_target)", len(class_target))
             print("len(steps)", len(steps))
             raise ValueError("preds and targets length is not same")
-        sleep_pred_list.extend(sleep_pred)
-        onset_pred_list.extend(onset_pred)
-        wakeup_pred_list.extend(wakeup_pred)
-        sleep_target_list.extend(sleep_target)
-        onset_target_list.extend(onset_target)
-        wakeup_target_list.extend(wakeup_target)
+        class_pred_list.extend(class_pred)
+        class_target_list.extend(class_target)
         steps_list.extend(steps)
         series_date_key_list.extend([series_date_key] * len(steps))
     oof_pred_target_df = pd.DataFrame(
         {
             "series_date_key": series_date_key_list,
             "step": steps_list,
-            "sleep_pred": sleep_pred_list,
-            "onset_pred": onset_pred_list,
-            "wakeup_pred": wakeup_pred_list,
-            "sleep_target": sleep_target_list,
-            "onset_target": onset_target_list,
-            "wakeup_target": wakeup_target_list,
+            "class_pred": class_pred_list,
+            "class_target": class_target_list,
         }
     )
+    # oof_df_fold.loc[data_condition, "class_pred"] = class_pred
+    # oof_df_fold.loc[data_condition, "class_target"] = class_target
+    merge_start_time = time.time()
     print("merging oof_df")
     oof_df_fold = pd.merge(
         oof_df_fold, oof_pred_target_df, on=["series_date_key", "step"], how="left"
     )
-    oof_df_fold["sleep_pred"] = oof_df_fold["sleep_pred"].interpolate()
-    oof_df_fold["onset_pred"] = oof_df_fold["onset_pred"].interpolate()
-    oof_df_fold["wakeup_pred"] = oof_df_fold["wakeup_pred"].interpolate()
+    oof_df_fold["class_pred"] = oof_df_fold["class_pred"].fillna(-1)
+    merge_elapsed = int(time.time() - merge_start_time) / 60
+    print("merge elapsed time: {:.2f} min".format(merge_elapsed))
+    elapsed = int(time.time() - start_time) / 60
     elapsed = int(time.time() - start_time) / 60
     print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
     return oof_df_fold
 
 
-def low_path_filter(wave: np.ndarray, hour: int, fe: int = 60, n: int = 3):
-    fs = 12 * 60 * hour
-    nyq = fs / 2.0
-    b, a = signal.butter(1, fe / nyq, btype="low")
-    for i in range(0, n):
-        wave = signal.filtfilt(b, a, wave)
-    return wave
-
-
-def make_submission_from_eventdf(
-    df, threshold=0.001, distance=70, low_pass_filter_hour=5
-):
-    df = df[["series_id", "step", "onset_pred", "wakeup_pred"]].copy()
-    df = df.rename(
-        columns={"sleep_pred": "sleep", "onset_pred": "onset", "wakeup_pred": "wakeup"}
-    )
-    df["step"] = df["step"].astype(np.float64)
-    unique_series_ids = df["series_id"].unique()
-    records = []
-    for series_id in unique_series_ids:
-        this_series_preds = df[df["series_id"] == series_id][["onset", "wakeup"]].values
-        for i, event_name in enumerate(["onset", "wakeup"]):
-            this_event_preds = this_series_preds[:, i]
-            # ローパスフィルタ
-            # this_event_preds = low_path_filter(
-            #     this_event_preds, hour=low_pass_filter_hour
-            # )  # (seq,)
-            # ガウシアンフィルタ(LPFとあんまり変わらない。両方かけるとcv下がった)
-            # this_event_preds = gaussian_filter1d(this_event_preds, sigma=10)
-
-            steps = find_peaks(this_event_preds, height=threshold, distance=distance)[0]
-            scores = this_event_preds[steps]
-
-            for step, score_ in zip(steps, scores):
-                records.append(
-                    {
-                        "series_id": series_id,
-                        "step": step,
-                        "event": event_name,
-                        "score": score_,
-                    }
-                )
-
-    if len(records) == 0:  # 一つも予測がない場合はdummyを入れる
-        records.append(
-            {
-                "series_id": series_id,
-                "step": 0,
-                "event": "onset",
-                "score": 0,
-            }
+def get_downsample_oof_df(
+    valid_input_info_dict: dict,
+    valid_preds_dict: dict,
+    valid_targets_dict: dict,
+    oof_df_fold: pd.DataFrame,
+    config,
+) -> pd.DataFrame:
+    start_time = time.time()
+    print("creating oof_df", end=" ... ")
+    oof_df_fold = oof_df_fold.drop(["class_pred", "class_target"], axis=1)
+    series_date_key_list = []
+    class_pred_list, class_target_list, steps_list = [], [], []
+    for idx, (series_date_key, start_step, end_step) in enumerate(
+        zip(
+            valid_input_info_dict["series_date_key"],
+            valid_input_info_dict["start_step"],
+            valid_input_info_dict["end_step"],
         )
-
-    sub_df = pl.DataFrame(records).sort(by=["series_id", "step"])
-    sub_df = sub_df.to_pandas()
-    print("detected event num: ", len(sub_df))
-    return sub_df
+    ):
+        # preds targets shape: [batch, ch, data_length]
+        class_pred = valid_preds_dict["class_preds"][idx]
+        class_target = valid_targets_dict["class_targets"][idx]
+        steps = range(start_step, end_step + 1, 12)
+        series_date_data_num = len(steps)
+        if series_date_data_num < len(class_pred[0]):
+            class_pred = class_pred[0, :series_date_data_num]
+            class_target = class_target[0, :series_date_data_num]
+        elif series_date_data_num > len(class_pred[0]):
+            padding_num = series_date_data_num - len(class_pred[0])
+            class_pred = np.concatenate(
+                [class_pred[0], -1 * np.ones(padding_num)], axis=0
+            )
+            class_target = np.concatenate(
+                [class_target[0], -1 * np.ones(padding_num)], axis=0
+            )
+        else:
+            class_pred = class_pred[0]
+            class_target = class_target[0]
+        if not (len(class_pred) == len(class_target)) or not (
+            len(class_pred) == len(steps)
+        ):
+            print("len(class_pred)", len(class_pred))
+            print("len(class_target)", len(class_target))
+            print("len(steps)", len(steps))
+            raise ValueError("preds and targets length is not same")
+        class_pred_list.extend(class_pred)
+        class_target_list.extend(class_target)
+        steps_list.extend(steps)
+        series_date_key_list.extend([series_date_key] * len(steps))
+    oof_pred_target_df = pd.DataFrame(
+        {
+            "series_date_key": series_date_key_list,
+            "step": steps_list,
+            "class_pred": class_pred_list,
+            "class_target": class_target_list,
+        }
+    )
+    merge_start_time = time.time()
+    print("merging oof_df")
+    oof_df_fold = pd.merge(
+        oof_df_fold, oof_pred_target_df, on=["series_date_key", "step"], how="left"
+    )
+    oof_df_fold["class_pred"] = oof_df_fold["class_pred"].fillna(-1)
+    merge_elapsed = int(time.time() - merge_start_time) / 60
+    print("merge elapsed time: {:.2f} min".format(merge_elapsed))
+    elapsed = int(time.time() - start_time) / 60
+    print(f" >> oof_df created. elapsed time: {elapsed:.2f} min")
+    return oof_df_fold
 
 
 def get_oof_df_and_fold_score(
@@ -442,23 +318,40 @@ def get_oof_df_and_fold_score(
     epoch,
 ):
     if "downsample" in CFG.model_type:
-        oof_df_fold = get_event_downsample_oof_df(
-            input_info_dict_list, valid_predictions, valid_targets, oof_df_fold, CFG
+        oof_df_fold = get_downsample_oof_df(
+            input_info_dict_list,
+            valid_predictions,
+            valid_targets,
+            oof_df_fold,
+            CFG,
         )
     else:
-        oof_df_fold = get_event_oof_df(
-            input_info_dict_list, valid_predictions, valid_targets, oof_df_fold
+        oof_df_fold = get_oof_df(
+            input_info_dict_list,
+            valid_predictions,
+            valid_targets,
+            oof_df_fold,
+            CFG,
         )
     oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
     oof_df_fold_path = os.path.join(oof_dir, f"oof_df_fold{fold}.parquet")
     print("save oof_df to ", oof_df_fold_path)
     oof_df_fold.to_parquet(oof_df_fold_path)
+    LOGGER.info(f"fold{fold} oof_df created.")
+    if "downsample" in CFG.model_type:
+        oof_df_fold = detect_event_from_downsample_classpred(oof_df_fold)
+    else:
+        oof_df_fold = detect_event_from_classpred(oof_df_fold)
     LOGGER.info(f"fold{fold} event detected.")
-    oof_scoring_df = make_submission_from_eventdf(oof_df_fold)
+    oof_scoring_df = make_submission_df(oof_df_fold)
     LOGGER.info(f"fold{fold} submission df created.")
+
     event_df_fold = event_df[event_df["series_id"].isin(valid_key_df["series_id"])]
     event_df_fold = event_df_fold[event_df_fold["step"].notnull()]
-    oof_score = score(event_df_fold, oof_scoring_df)
+    if len(oof_scoring_df) > 0:
+        oof_score = score(event_df_fold, oof_scoring_df)
+    else:
+        oof_score = 0.0
     LOGGER.info(f"fold{fold} epoch {epoch} oof score: {oof_score:.4f}")
     return oof_df_fold, oof_score
 
@@ -473,32 +366,39 @@ def get_key_df(series_df: pd.DataFrame) -> pd.DataFrame:
     return key_df
 
 
-def eventdet_training_loop(CFG, LOGGER):
+def training_loop_earlysave(CFG, LOGGER):
     # key_df = pd.read_csv(CFG.key_df)
+    # not_train_series_ids = [
+    #     "60d31b0bec3b",
+    #     "f56824b503a0",
+    #     "4feda0596965",
+    #     "e4500e7e19e1",
+    # ]
+    # LOGGER.info("not train series ids")
+    # LOGGER.info(not_train_series_ids)
+    remove_keys = np.load("/kaggle/working/remove_keys.npy")
+    LOGGER.info("remove keys")
+    LOGGER.info(remove_keys)
+    LOGGER.info("remove keys num: {}".format(len(remove_keys)))
+    too_short_event_df = pd.read_csv("/kaggle/working/too_short_event_keys.csv")
+    too_short_event_keys = too_short_event_df["key"].unique()
+    LOGGER.info("too short event keys")
+    LOGGER.info(too_short_event_keys)
+    LOGGER.info("too short event keys num: {}".format(len(too_short_event_keys)))
     LOGGER.info("loading series_df")
     series_df = pd.read_parquet(CFG.series_df)
     key_df = get_key_df(series_df)
-    train_event_df = pl.read_csv(CFG.event_df)
-    train_event_df = (
-        train_event_df.pivot(
-            index=["series_id", "night"], columns="event", values="step"
-        )
-        .drop_nulls()
-        .to_pandas()
-    )
+
     LOGGER.info("series_df data num : {}".format(len(series_df)))
     LOGGER.info("key_df data num : {}".format(len(key_df)))
-    nan_event_keys = np.load("/kaggle/working/nan_event_keys.npy")
-    LOGGER.info("nan event keys")
-    LOGGER.info(nan_event_keys)
     event_df = pd.read_csv(os.path.join(CFG.event_df))
-    event_df = event_df.dropna(subset=["step"])
+    event_df = event_df[event_df["series_id"].isin(series_df["series_id"])]
     # oof_df = pd.DataFrame()
+    best_score_list = []
     oof_dir = os.path.join(CFG.output_dir, "_oof", CFG.exp_name)
     os.makedirs(oof_dir, exist_ok=True)
-    oof_score_list = []
     for fold in CFG.folds:
-        LOGGER.info(f"-- fold{fold} event detection training start --")
+        LOGGER.info(f"-- fold{fold} training start --")
         wandb_logger = WandbLogger(CFG)
         wandb_log_dict = {}
         # set model & learning fn
@@ -510,27 +410,42 @@ def eventdet_training_loop(CFG, LOGGER):
 
         # training
         start_time = time.time()
+
         LOGGER.info(f"fold[{fold}] loading train/valid data")
         train_series_df = series_df[series_df["fold"] != fold]
-        # nan event keyの除外
+        # train_series_df = train_series_df[
+        #     ~train_series_df["series_id"].isin(not_train_series_ids)
+        # ].reset_index(drop=True)
+        # 連日類似波形Nanデータの除外
         train_series_df = train_series_df[
-            ~train_series_df["series_date_key"].isin(nan_event_keys)
+            ~train_series_df["series_date_key"].isin(remove_keys)
+        ].reset_index(drop=True)
+        # eventが短すぎるデータの除外
+        train_series_df = train_series_df[
+            ~train_series_df["series_date_key"].isin(too_short_event_keys)
         ].reset_index(drop=True)
         train_key_df = get_key_df(train_series_df)
         valid_series_df = series_df[series_df["fold"] == fold]
+        # 連日類似波形Nanデータの除外
+        valid_series_df = valid_series_df[
+            ~valid_series_df["series_date_key"].isin(remove_keys)
+        ].reset_index(drop=True)
+        # eventが短すぎるデータの除外
+        valid_series_df = valid_series_df[
+            ~valid_series_df["series_date_key"].isin(too_short_event_keys)
+        ].reset_index(drop=True)
         valid_key_df = get_key_df(valid_series_df)
         train_key_num = len(train_key_df)
         valid_key_num = len(valid_key_df)
         LOGGER.info(f"fold[{fold}] train data key num: {train_key_num}")
         LOGGER.info(f"fold[{fold}] valid data key num: {valid_key_num}")
-        train_loader = get_loader(
-            CFG, train_key_df, train_series_df, event_df=train_event_df, mode="train"
-        )
-        valid_loader = get_loader(
-            CFG, valid_key_df, valid_series_df, event_df=train_event_df, mode="valid"
-        )
+        # if train_key_num + valid_key_num != len(key_df):
+        #     raise ValueError("train/valid data key num is not same")
+        train_loader = get_loader(CFG, train_key_df, train_series_df, mode="train")
+        valid_loader = get_loader(CFG, valid_key_df, valid_series_df, mode="valid")
         LOGGER.info(f"fold[{fold}] get_loader finished")
 
+        ema = ExponentialMovingAverage(model.parameters(), decay=0.995)
         oof_df_fold = valid_series_df.copy()
         fold_best_score = 0.0
         for epoch in range(0, CFG.n_epoch):
@@ -553,12 +468,21 @@ def eventdet_training_loop(CFG, LOGGER):
                 CFG,
                 epoch,
                 model,
+                ema,
                 valid_loader,
                 class_criterion,
                 LOGGER,
             )
+
+            # lr = scheduler.get_last_lr()[0]
             lr = optimizer.param_groups[0]["lr"]
             scheduler.step(epoch + 1)
+            ema.update(model.parameters())
+
+            if len(oof_df_fold["series_date_key"].unique()) != len(
+                valid_series_df["series_date_key"].unique()
+            ):
+                raise ValueError("oof data key num is not same")
             oof_df_fold, oof_score = get_oof_df_and_fold_score(
                 CFG,
                 LOGGER,
@@ -579,26 +503,23 @@ def eventdet_training_loop(CFG, LOGGER):
                     oof_dir, f"fold{fold}_best_oof_df.parquet"
                 )
                 oof_df_fold.to_parquet(oof_df_fold_path)
+            LOGGER.info(f"fold{fold} best score: {fold_best_score:.4f}")
             elapsed = int(time.time() - start_time) / 60
             log_str = f"FOLD:{fold}, Epoch:{epoch}"
             log_str += f", train:{train_loss_avg:.4f}, valid:{valid_loss_avg:.4f}"
             log_str += f", lr:{lr:.6f}, elapsed time:{elapsed:.2f} min"
             LOGGER.info(log_str)
-            # competition scoreを計算するように変更する
-
             # wandb log
             wandb_log_dict[f"train_loss/fold{fold}"] = train_loss_avg
             wandb_log_dict[f"valid_loss/fold{fold}"] = valid_loss_avg
             wandb_log_dict[f"lr/fold{fold}"] = lr
+            wandb_log_dict[f"oof_score/fold{fold}"] = oof_score
             wandb_logger.log_progress(epoch, wandb_log_dict)
-        oof_score_list.append(fold_best_score)
+
         # model save
         model_path = os.path.join(CFG.exp_dir, f"fold{fold}_model.pth")
         torch.save(model.state_dict(), model_path)
-        if len(oof_df_fold["series_date_key"].unique()) != len(
-            valid_series_df["series_date_key"].unique()
-        ):
-            raise ValueError("oof data key num is not same")
+        best_score_list.append(fold_best_score)
         del (
             model,
             train_loader,
@@ -609,11 +530,9 @@ def eventdet_training_loop(CFG, LOGGER):
         )
         gc.collect()
         torch.cuda.empty_cache()
-    over_all_score_mean = np.mean(oof_score_list)
+    over_all_score_mean = np.mean(best_score_list)
     LOGGER.info(f"overall oof score mean: {over_all_score_mean:.4f}")
-    for fold, oof_score in enumerate(oof_score_list):
-        LOGGER.info(f"fold{fold} best oof score: {oof_score:.4f}")
-        wandb_logger.log_best_score(fold, oof_score)
+
     wandb_logger.log_overall_oofscore(over_all_score_mean)
 
 
@@ -622,24 +541,27 @@ if __name__ == "__main__":
 
     class CFG:
         # exp
-        exp_name = "event_det_debug"
+        EXP_NAME = "no_scoring_check"
 
         # directory
-        input_dir = os.path.abspath(
+        INPUT_DIR = os.path.abspath(
             os.path.join(
                 ROOT_DIR,
                 "input",
             )
         )
-        competition_dir = os.path.join(
-            input_dir,
+        COMPETITION_DIR = os.path.join(
+            INPUT_DIR,
             "child-mind-institute-detect-sleep-states",
         )
-        output_dir = os.path.abspath(os.path.join(ROOT_DIR, "working"))
-        exp_dir = os.path.join(output_dir, exp_name)
-        series_df = os.path.join("/kaggle/working/_oof/exp006_addlayer/oof_df.parquet")
-        event_df = (
-            "/kaggle/input/child-mind-institute-detect-sleep-states/train_events.csv"
+        OUTPUT_DIR = os.path.abspath(os.path.join(ROOT_DIR, "working"))
+        # TRAIN_DIR = os.path.join(COMPETITION_DIR, "train")
+        # TEST_DIR = os.path.join(COMPETITION_DIR, "test")
+        key_df = os.path.join(INPUT_DIR, "datakey_unique_non_null.csv")
+        series_df = os.path.join(INPUT_DIR, "processed_train_withkey_nonull.parquet")
+        # event_df = os.path.join(INPUT_DIR, "train_events.csv")
+        event_df = os.path.join(
+            "/kaggle/input/preprocessed_train_event_notnull.parquet"
         )
         # data
         # folds = [0, 1, 2, 3, 4]
@@ -650,19 +572,17 @@ if __name__ == "__main__":
         group_key = "series_id"
 
         # model
-        model_type = "event_detect"
-        input_channels = 3
-        output_channels = 2
+        model_type = "single_output"
+        input_channels = 2
+        class_output_channels = 1
+        event_output_channels = 2
         embedding_base_channels = 16
-        ave_kernel_size = 301
-        maxpool_kernel_size = 11
 
         class_loss_weight = 1.0
         event_loss_weight = 100.0
 
         # training
-        # n_epoch = 5
-        n_epoch = 1
+        n_epoch = 5
         # batch_size = 32
         batch_size = 128
         # optimizer
@@ -677,11 +597,9 @@ if __name__ == "__main__":
         # log setting
         print_freq = 100
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        wandb_available = False
 
-    os.makedirs(CFG.output_dir, exist_ok=True)
-    os.makedirs(CFG.exp_dir, exist_ok=True)
+    os.makedirs(CFG.OUTPUT_DIR, exist_ok=True)
 
-    LOGGER = init_logger(log_file=os.path.join(CFG.output_dir, "check.log"))
+    LOGGER = init_logger(log_file=os.path.join(CFG.OUTPUT_DIR, "check.log"))
     LOGGER.info(f"using device: {CFG.device}")
-    eventdet_training_loop(CFG, LOGGER)
+    training_loop_earlysave(CFG, LOGGER)

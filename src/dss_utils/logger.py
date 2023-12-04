@@ -56,7 +56,11 @@ def set_wandb_make_dir(configs):
 
 def init_logger(log_file="train.log"):
     """Output Log."""
-    from logging import INFO, FileHandler, Formatter, StreamHandler, getLogger
+    from logging import INFO
+    from logging import FileHandler
+    from logging import Formatter
+    from logging import StreamHandler
+    from logging import getLogger
 
     logger = getLogger(__name__)
     logger.setLevel(INFO)
@@ -165,3 +169,7 @@ class WandbLogger:
     def log_overall_oofscore(self, score):
         if self.wadnb_available:
             wandb.log({"overall_oof_score": score})
+
+    def log_best_score(self, fold, score):
+        if self.wadnb_available:
+            wandb.log({"best_score": score, "fold": fold})

@@ -26,9 +26,9 @@ if __name__ == "__main__":
         group_key = "series_id"
 
         # filename = "/kaggle/input/train_series_alldata.parquet"
-        filename = "/kaggle/input/train_series_alldata_halflabel.parquet"
+        filename = "/kaggle/input/train_series_alldata_elapseddate.parquet"
         # output_filename = "/kaggle/input/train_series_alldata_fold.parquet"
-        output_filename = "/kaggle/input/train_series_alldata_halflabel_fold.parquet"
+        output_filename = "/kaggle/input/train_series_alldata_elapseddate_fold.parquet"
         fold_yamls = [
             f"/kaggle/input/fold_split_yaml/stfk_event_count_bins105_fold{i}.yaml"
             for i in range(n_folds)

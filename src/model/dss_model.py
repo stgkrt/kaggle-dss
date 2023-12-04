@@ -271,7 +271,10 @@ class DenseLSTMEncoder(nn.Module):
 
         self.dense_conv = nn.ModuleList()
         # self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
-        self.dense_conv_kernel_size_list = config.enc_kernelsize_list
+        if not hasattr(config, "enc_kernelsize_list"):
+            self.dense_conv_kernel_size_list = [12, 24, 48, 96, 192, 384]
+        else:
+            self.dense_conv_kernel_size_list = config.enc_kernelsize_list
         for kernel_size in self.dense_conv_kernel_size_list:
             # 全ての出力サイズが1/12になるようにpaddingを調整
             padding_size = int((kernel_size - 1) / 2)
@@ -595,6 +598,43 @@ class DecoderBlock(nn.Module):
         return x
 
 
+class DecoderTransposeBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 32,
+        out_channels: int = 16,
+        conv_kernel_size: int = 5,
+        upsample_size: int = 10,
+    ) -> None:
+        super().__init__()
+        self.upsample_conv = nn.Sequential(
+            nn.ConvTranspose1d(
+                in_channels,
+                in_channels // 2,
+                upsample_size,
+                stride=upsample_size,
+            ),
+            nn.BatchNorm1d(in_channels // 2),
+            nn.ReLU(),
+        )
+        self.decoder_conv = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, conv_kernel_size, padding="same"),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+            nn.Conv1d(out_channels, out_channels, conv_kernel_size, padding="same"),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(),
+        )
+
+    def forward(self, x, skip_connection):
+        x = self.upsample_conv(x)
+        diff = skip_connection.shape[-1] - x.shape[-1]
+        x = nn.functional.pad(x, (diff // 2, diff - diff // 2))
+        x = torch.cat([x, skip_connection], dim=1)
+        x = self.decoder_conv(x)
+        return x
+
+
 class DecoderTrsBlock(nn.Module):
     def __init__(
         self,
@@ -678,6 +718,56 @@ class Decoder(nn.Module):
                 upsample_size=skip_connections_length[3],
             ),
         )
+
+    def forward(self, x, skip_connections):
+        for idx, decoder_block in enumerate(self.decoder_blocks):
+            x = decoder_block(x, skip_connections[-idx - 1])
+        return x
+
+
+class DecoderTranspose(nn.Module):
+    def __init__(
+        self,
+        input_channels: int = 16,
+        skip_connections_length: list = [36, 216, 1728, 17280],
+    ) -> None:
+        super().__init__()
+        self.decoder_blocks = nn.ModuleList()
+        for idx, skip_connection_length in enumerate(skip_connections_length):
+            self.decoder_blocks.append(
+                DecoderTransposeBlock(
+                    input_channels * 2 ** (4 - idx),
+                    input_channels * 2 ** (3 - idx),
+                    conv_kernel_size=5,
+                    upsample_size=skip_connection_length,
+                )
+            )
+
+        #     DecoderTransposeBlock(
+        #         input_channels * 16,
+        #         input_channels * 8,
+        #         conv_kernel_size=4,
+        #         upsample_size=skip_connections_length[0],
+        #     ),
+        #     DecoderTransposeBlock(
+        #         input_channels * 8,
+        #         input_channels * 4,
+        #         conv_kernel_size=5,
+        #         upsample_size=skip_connections_length[1],
+        #     ),
+        #     DecoderTransposeBlock(
+        #         input_channels * 4,
+        #         input_channels * 2,
+        #         conv_kernel_size=5,
+        #         upsample_size=skip_connections_length[2],
+        #     ),
+        #     DecoderTransposeBlock(
+        #         input_channels * 2,
+        #         input_channels,
+        #         conv_kernel_size=5,
+        #         upsample_size=skip_connections_length[3],
+        #     ),
+        # )
 
     def forward(self, x, skip_connections):
         for idx, decoder_block in enumerate(self.decoder_blocks):
@@ -970,6 +1060,124 @@ class DSSUTimeDenseLSTMEncHeadModel(nn.Module):
         return class_output
 
 
+class Head(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=3,
+            ),
+            # nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        class_output = self.head(x)
+        return class_output
+
+
+class DSSUTimeDenseLSTMEncHead3chModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = Head(config)
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        x = self.head(x)
+        return x
+
+
+class DownsampleHead(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels,
+                kernel_size=config.downsample_rate,
+                stride=config.downsample_rate,
+            ),
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=3,
+            ),
+            # nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        class_output = self.head(x)
+        return class_output
+
+
+class DenseLSTM3chDownsample(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = DownsampleHead(config)
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        x = self.head(x)
+        return x
+
+
 class DSSUTimeDenseSELSTMEncHeadModel(nn.Module):
     def __init__(self, config) -> None:
         super().__init__()
@@ -978,6 +1186,59 @@ class DSSUTimeDenseSELSTMEncHeadModel(nn.Module):
         skip_connections_length = self._get_skip_connections_length()
         self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
         self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=config.class_output_channels,
+            ),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
+class DenseSELSTMEncHeadDownsampleModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseSELSTMEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels,
+                kernel_size=config.downsample_rate,
+                stride=config.downsample_rate,
+            ),
             nn.Conv1d(
                 config.embedding_base_channels,
                 config.embedding_base_channels * 2,
@@ -1835,13 +2096,13 @@ class DetectHead(nn.Module):
             nn.Dropout(0.2),
             nn.Conv1d(
                 config.embedding_base_channels * 4,
-                1,
+                3,
                 kernel_size=1,
                 stride=1,
                 padding="same",
             ),
             nn.Dropout(0.2),
-            nn.Sigmoid(),
+            # nn.Sigmoid(),
         )
 
     def forward(self, x):
@@ -1874,6 +2135,142 @@ class DSSUTimeDense2chModel(nn.Module):
         return x
 
 
+class DSSUTimeDense3chModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseEncoder(
+            config.input_channels, config.embedding_base_channels
+        )
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.head = DetectHead(config)
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        x = self.head(x)
+        return x
+
+
+class DenseLSTMEncHeadTransposeDecModel(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = DecoderTranspose(
+            config.embedding_base_channels, skip_connections_length
+        )
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.BatchNorm1d(config.embedding_base_channels * 4),
+            nn.ReLU(),
+            LSTMHead(
+                input_size=config.embedding_base_channels * 4,
+                hidden_size=config.embedding_base_channels,
+                num_layers=config.lstm_num_layers,
+                dropout=0.2,
+                bidirectional=True,
+                n_classes=config.class_output_channels,
+            ),
+            # nn.Softmax(dim=1),
+            nn.Sigmoid(),
+        )
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        class_output = self.head(x)
+        return class_output
+
+
+class CenterHead(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Conv1d(
+                config.embedding_base_channels,
+                config.embedding_base_channels * 2,
+                kernel_size=3,  # 12を入れてもいいかも
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.BatchNorm1d(config.embedding_base_channels * 2),
+            nn.ReLU(),
+            nn.Conv1d(
+                config.embedding_base_channels * 2,
+                config.embedding_base_channels * 4,
+                kernel_size=3,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.Conv1d(
+                config.embedding_base_channels * 4,
+                1,
+                kernel_size=1,
+                stride=1,
+                padding="same",
+            ),
+            nn.Dropout(0.2),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        x = self.head(x)
+        return x
+
+
+class CenterNet(nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+        self.encoder = DenseLSTMEncoder(config)
+        self.neck_conv = NeckBlock(config.embedding_base_channels * 8)
+        skip_connections_length = self._get_skip_connections_length()
+        self.decoder = Decoder(config.embedding_base_channels, skip_connections_length)
+        self.centermap_head = CenterHead(config)
+        self.offset_head = CenterHead(config)
+        self.size_head = CenterHead(config)
+
+    def _get_skip_connections_length(self):
+        return [30, 180, 1440, 17280]
+
+    def forward(self, x):
+        x, skip_connetctions = self.encoder(x)
+        x = self.neck_conv(x)
+        x = self.decoder(x, skip_connetctions)
+        center_map = self.centermap_head(x)
+        offset = self.offset_head(x)
+        size = self.size_head(x)
+        output = {
+            "center_map": center_map,
+            "offset": offset,
+            "size": size,
+        }
+        return output
+
+
 def get_model(config):
     print("model type = ", config.model_type)
     if config.model_type == "event_output":
@@ -1902,12 +2299,28 @@ def get_model(config):
         model = DSSUTimeDenseLSTMModel(config)
     elif config.model_type == "dense_lstm_enc_head":
         model = DSSUTimeDenseLSTMEncHeadModel(config)
+    elif config.model_type == "add_duplicate":
+        model = DSSUTimeDenseLSTMEncHeadModel(config)
+    elif config.model_type == "dense_lstm_enc_head_3ch":
+        model = DSSUTimeDenseLSTMEncHead3chModel(config)
     elif config.model_type == "dense_lstm_se_enc_head":
         model = DSSUTimeDenseSELSTMEncHeadModel(config)
     elif config.model_type == "dense_lstm_enc_head_trs_enc":
         model = DSSUTimeDenseLSTMEncHeadTrsEncModel(config)
     elif config.model_type == "dense_lstm_enc_head_trs_enc_dec":
         model = DSSUTimeDenseLSTMEncHeadTrsEncDecModel(config)
+    elif config.model_type == "dense_lstm_enc_head_dec_transpose":
+        model = DenseLSTMEncHeadTransposeDecModel(config)
+    elif config.model_type == "centernet":
+        model = CenterNet(config)
+    elif config.model_type == "dense3ch":
+        model = DSSUTimeDenseLSTMEncHead3chModel(config)
+    elif config.model_type == "dense3ch_downsample":
+        model = DenseLSTM3chDownsample(config)
+    elif config.model_type == "elapsed_date":
+        model = DSSUTimeDenseLSTMEncHeadModel(config)
+    elif config.model_type == "lstm_enc_head_downsample":
+        model = DenseSELSTMEncHeadDownsampleModel(config)
     else:
         model = DSSUTimeModel(config)
     return model
@@ -1916,7 +2329,9 @@ def get_model(config):
 if __name__ == "__main__":
 
     class config:
-        model_type = "dense_lstm_se_enc_head"
+        # model_type = "centernet"
+        # model_type = "dense3ch_downsample"
+        model_type = "lstm_enc_head_downsample"
         input_channels = 6
         embedding_base_channels = 16
         class_output_channels = 1
@@ -1925,6 +2340,7 @@ if __name__ == "__main__":
         ave_kernel_size = 301
         maxpool_kernel_size = 11
         batch_size = 32
+        downsample_rate = 4
 
     x = torch.randn(
         config.batch_size, config.input_channels, 17280
@@ -1939,4 +2355,9 @@ if __name__ == "__main__":
     print("input shape: ", x.shape)
     model = get_model(config)
     output = model(x)
-    print("output shape", output.shape)
+    if config.model_type == "centernet":
+        print("output shape", output["center_map"].shape)
+        print("output shape", output["offset"].shape)
+        print("output shape", output["size"].shape)
+    else:
+        print("output shape", output.shape)

@@ -3,12 +3,15 @@ import os
 import sys
 
 import torch
+from centernet_training_loop_earlysave import centernet_training_loop_earlysave
 from detectclass_training_loop_earlysave import detectclass_training_loop
 from eventclass_training_loop import eventclass_training_loop
 from eventdet_training_loop import eventdet_training_loop
 from pseudo_training_loop import pseudo_training_loop
 from training_loop import seed_everything
 from training_loop_earlysave import training_loop_earlysave as training_loop
+
+# from training_loop_earlysave_ema import training_loop_earlysave as training_loop
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from logger import init_logger
@@ -113,6 +116,7 @@ def parse_args():
     parser.add_argument(
         "--enc-kernelsize-list", type=int, nargs="*", default=[12, 24, 48, 96]
     )
+    parser.add_argument("--downsample-rate", type=int, default=4)
 
     # training setting
     parser.add_argument("--n_epoch", type=int, default=2)
@@ -121,7 +125,9 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=1e-6)
     parser.add_argument("--T_0", type=int, default=10)
     parser.add_argument("--T_mult", type=int, default=1)
-    parser.add_argument("--eta_min", type=float, default=1e-9)
+    # parser.add_argument("--eta_min", type=float, default=1e-9)
+    parser.add_argument("--eta_min", type=float, default=5e-8)
+    parser.add_argument("--warmup_t", type=int, default=2)
     parser.add_argument("--class_loss_weight", type=float, default=1.0)
     parser.add_argument("--event_loss_weight", type=float, default=1.0)
 
@@ -157,6 +163,12 @@ if __name__ == "__main__":
             eventclass_training_loop(config, logger)
         elif config.model_type == "dense2ch":
             detectclass_training_loop(config, logger)
+        elif config.model_type == "centernet":
+            centernet_training_loop_earlysave(config, logger)
+        elif config.model_type == "dense3ch":
+            eventdet_training_loop(config, logger)
+        elif config.model_type == "dense3ch_downsample":
+            eventdet_training_loop(config, logger)
         else:
             training_loop(config, logger)
     elif config.train_mode == "pseudo":

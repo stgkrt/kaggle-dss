@@ -1,5 +1,6 @@
+# from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from timm.scheduler import CosineLRScheduler
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 
 def get_optimizer(model, CFG):
@@ -13,11 +14,18 @@ def get_optimizer(model, CFG):
 
 
 def get_scheduler(optimizer, CFG):
-    scheduler = CosineAnnealingWarmRestarts(
+    # scheduler = CosineAnnealingWarmRestarts(
+    #     optimizer,
+    #     T_0=CFG.T_0,
+    #     T_mult=CFG.T_mult,
+    #     eta_min=CFG.eta_min,
+    #     last_epoch=-1,
+    # )
+    scheduler = CosineLRScheduler(
         optimizer,
-        T_0=CFG.T_0,
-        T_mult=CFG.T_mult,
-        eta_min=CFG.eta_min,
-        last_epoch=-1,
+        t_initial=CFG.T_0,
+        lr_min=CFG.eta_min,
+        warmup_lr_init=CFG.eta_min,
+        warmup_t=CFG.warmup_t,
     )
     return scheduler
